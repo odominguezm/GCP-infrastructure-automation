@@ -60,8 +60,8 @@ resource "google_compute_instance" "vm_devops" {
   }
 
   metadata = {
-    # Usamos tu llave SSH existente
-    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa_oracle.pub")}"
+    # Usamos la nueva llave generada
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa_gcp.pub")}"
   }
 }
 
@@ -69,3 +69,4 @@ resource "google_compute_instance" "vm_devops" {
 output "ip_publica" {
   value = google_compute_instance.vm_devops.network_interface[0].access_config[0].nat_ip
 }
+
