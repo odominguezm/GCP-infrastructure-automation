@@ -1,0 +1,62 @@
+---
+- name: Preparar servidor para Docker
+  hosts: gcp_servers
+  become: yes  # Esto es para ejecutar como sudo
+  tasks:
+    - name: Actualizar repositorios (apt-get update)
+      apt:
+        update_cache: yes
+        force_apt_get: yes
+
+    - name: Instalar herramientas básicas
+      apt:
+        name:
+          - curl
+          - git
+          - unzip
+        state: present
+
+    - name: Verificar si el servidor necesita reinicio
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: Avisar si se requiere reinicio
+      debug:
+        msg: "El servidor necesita reinicio después de las actualizaciones."
+      when: reboot_required_file.stat.exists
+
+    - name: Instalar paquetes previos para Docker
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Agregar llave GPG oficial de Docker
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Configurar repositorio estable de Docker
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_lsb.codename }} stable"
+        state: present
+
+    - name: Instalar Docker Engine y Docker Compose
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Asegurar que el servicio Docker esté iniciado
+      service:
+        name: docker
+        state: started
+        enabled: yes
