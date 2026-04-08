@@ -1,0 +1,20 @@
+---
+- name: Desplegar aplicacion con Docker Compose
+  hosts: gcp_servers
+  become: yes
+  tasks:
+    - name: Crear directorio para la aplicacion
+      file:
+        path: /home/ubuntu/app/html
+        state: directory
+        mode: '0755'
+
+    - name: Copiar archivos de la aplicacion
+      copy:
+        src: ./app/
+        dest: /home/ubuntu/app/
+
+    - name: Levantar contenedores con Docker Compose (Comando Directo)
+      shell:
+        cmd: /usr/bin/docker compose up -d
+        chdir: /home/ubuntu/app/
