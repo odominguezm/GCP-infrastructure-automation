@@ -22,12 +22,13 @@ jobs:
       - name: 3. Instalar Ansible y Desplegar
         run: |
           pip install ansible
-          # Creamos un archivo de inventario temporal para que no haya dudas
-          echo "${{ secrets.GCP_IP }} ansible_user=${{ secrets.GCP_USER }} ansible_ssh_private_key_file=~/.ssh/id_rsa ansible_ssh_common_args='-o StrictHostKeyChecking=no'" > inventory_github.ini
+          # Creamos el inventario con el nombre de grupo [gcp_servers]
+          echo "[gcp_servers]" > inventory_github.ini
+          echo "${{ secrets.GCP_IP }} ansible_user=${{ secrets.GCP_USER }} ansible_ssh_private_key_file=~/.ssh/id_rsa ansible_ssh_common_args='-o StrictHostKeyChecking=no'" >> inventory_github.ini
           
-          echo "Contenido del inventario:"
+          echo "Verificando inventario creado:"
           cat inventory_github.ini
           
-          # Ejecutamos con -vvv (Triple v para ver el rastro de la conexión SSH)
-          ansible-playbook -i inventory_github.ini deploy_app.yml -vvv
+          # Ejecutamos el despliegue
+          ansible-playbook -i inventory_github.ini deploy_app.yml -v
           
