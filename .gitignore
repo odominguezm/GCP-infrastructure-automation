@@ -1,11 +1,34 @@
-# Ignorar archivos de autenticación (Seguridad)
+# ==========================================
+# SEGURIDAD Y AUTENTICACIÓN
+# ==========================================
+# Llaves de servicio de GCP y JSONs sensibles
 keys/*.json
+*.pem
+*.pub
+id_rsa*
 
-# Ignorar archivos locales de Terraform
+# Inventarios de Ansible (Locales y temporales de GitHub)
+inventory.ini
+inventory_github.ini
+
+# ==========================================
+# TERRAFORM (IaC)
+# ==========================================
+# Directorio de plugins y módulos
 .terraform/
+
+# Archivos de estado (Contienen IPs y datos sensibles en texto plano)
 *.tfstate
 *.tfstate.backup
+
+# Bloqueo de versiones de proveedores
 .terraform.lock.hcl
 
-# Ignorar archivos del sistema Mac
+# ==========================================
+# ARCHIVOS DEL SISTEMA Y ENTORNO
+# ==========================================
+# Específicos de macOS
 .DS_Store
+
+# Logs de error y temporales
+*.log
