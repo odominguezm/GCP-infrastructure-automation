@@ -3,24 +3,27 @@
   hosts: gcp_servers
   become: yes
   tasks:
-    - name: 1. Limpieza total de versiones previas
+    - name: 1. Limpieza radical del directorio
       file:
         path: /home/ubuntu/app
         state: absent
 
-    - name: 2. Crear estructura de directorios limpia
+    - name: 2. Recrear directorios
       file:
         path: /home/ubuntu/app/html
         state: directory
         mode: '0755'
 
-    - name: 3. Copiar archivos frescos desde el repositorio
+    - name: 3. Crear marcador de despliegue (Debug)
+      shell: "date > /home/ubuntu/app/deploy_time.txt"
+
+    - name: 4. Copiar archivos desde GitHub
       copy:
-        src: app/  # Esto copiará el contenido de tu carpeta 'app' local
+        src: app/
         dest: /home/ubuntu/app/
         force: yes
 
-    - name: 4. Levantar contenedores con Docker Compose
+    - name: 5. Reiniciar Docker
       shell:
         cmd: /usr/bin/docker compose up -d --force-recreate
         chdir: /home/ubuntu/app/
