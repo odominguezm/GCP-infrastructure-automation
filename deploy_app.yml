@@ -11,10 +11,11 @@
 
     - name: Copiar archivos de la aplicacion
       copy:
-        src: ./app/
+        src: app/  # Quitamos el ./ para que sea relativo a la raíz del repo
         dest: /home/ubuntu/app/
+        force: yes # <--- Obliga a sobreescribir si el archivo ya existe
 
-    - name: Levantar contenedores con Docker Compose (Comando Directo)
+    - name: Levantar contenedores con Docker Compose
       shell:
         cmd: /usr/bin/docker compose up -d --force-recreate
         chdir: /home/ubuntu/app/

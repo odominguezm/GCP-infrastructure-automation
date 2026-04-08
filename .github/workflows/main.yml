@@ -21,7 +21,7 @@ jobs:
 
       - name: Desplegar con Ansible
         run: |
-          # Instalamos ansible en el runner de GitHub
           pip install ansible
-          # Ejecutamos el playbook usando los secretos
-          ansible-playbook -i "${{ secrets.GCP_IP }}," -u ${{ secrets.GCP_USER }} --private-key ~/.ssh/id_rsa deploy_app.yml
+          # Añadimos -vv para ver exactamente qué hace Ansible si falla
+          ansible-playbook -i "${{ secrets.GCP_IP }}," -u ${{ secrets.GCP_USER }} --private-key ~/.ssh/id_rsa deploy_app.yml -vv
+          
