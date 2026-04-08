@@ -1,42 +1,37 @@
-# ☁️ GCP Infrastructure & Configuration Automation
+# 🚀 GCP Infrastructure Automation & CI/CD Pipeline
 
-Este repositorio contiene el ciclo de vida de un entorno de laboratorio robusto en **Google Cloud Platform (GCP)**, utilizando **Infraestructura como Código (IaC)** y **Gestión de Configuración**.
+Este proyecto es un portafolio de automatización que demuestra el despliegue de una infraestructura completa en Google Cloud Platform (GCP) utilizando prácticas de **IaC (Infrastructure as Code)** y **CI/CD**.
 
-## 🚀 Estado del Proyecto: Fase 2 Completada ✅
+## 🛠️ Tecnologías Utilizadas
+* **Cloud:** Google Cloud Platform (GCP)
+* **IaC:** Terraform
+* **Config Management:** Ansible
+* **Contenedores:** Docker & Docker Compose
+* **CI/CD:** GitHub Actions
+* **OS:** Ubuntu Server
 
-El proyecto ha evolucionado desde el aprovisionamiento básico hasta la preparación de un entorno listo para contenedores.
+## 🏗️ Arquitectura del Proyecto
+El flujo de trabajo automatizado sigue estas etapas:
+1. **Provisionamiento:** Terraform crea la instancia de cómputo y las reglas de Firewall en GCP.
+2. **Configuración:** Ansible instala Docker, Docker Compose y prepara el entorno.
+3. **Despliegue:** Docker Compose levanta un servidor web Nginx personalizado.
+4. **Automatización:** Cada `git push` a la rama `main` dispara un pipeline de GitHub Actions que actualiza el servidor en tiempo real.
 
-### 🏗️ Fase 1: Provisionamiento (Terraform)
-* **VPC & Networking:** Red personalizada, subredes y reglas de firewall (SSH).
-* **Compute:** Despliegue de instancia `e2-micro` (Ubuntu 22.04 LTS) en la capa gratuita.
-* **Seguridad:** Gestión de llaves SSH específicas para el entorno GCP.
+## 📈 Progreso del Proyecto
 
-### 🛠️ Fase 2: Configuración (Ansible)
-Se ha implementado la automatización del software sin intervención manual:
-* **Actualización del Sistema:** Repositorios y parches de seguridad al día.
-* **Tooling:** Instalación automática de `curl`, `git`, `unzip` y dependencias.
-* **Docker Engine:** Instalación y configuración de Docker y Docker Compose para la siguiente fase.
+| Fase | Descripción | Estado |
+| :--- | :--- | :--- |
+| **Fase 1** | Provisionamiento de Infraestructura con Terraform | ✅ Completada |
+| **Fase 2** | Gestión de Configuración con Ansible | ✅ Completada |
+| **Fase 3** | Contenedorización con Docker & Docker Compose | ✅ Completada |
+| **Fase 4** | Pipeline de CI/CD con GitHub Actions | ✅ Completada |
+| **Fase 5** | Observabilidad y Monitoreo (Métricas) | 🕒 En Progreso |
 
-## 📦 Estructura del Repositorio
+## 🚀 Cómo funciona el CI/CD
+El pipeline de **GitHub Actions** utiliza secretos cifrados (`GCP_IP`, `GCP_USER`, `SSH_PRIVATE_KEY`) para garantizar la seguridad. Al detectar un cambio en el código:
+1. Inicia un Runner de Ubuntu.
+2. Configura la autenticación SSH.
+3. Ejecuta el Playbook de Ansible para sincronizar archivos y refrescar los contenedores con `--force-recreate`.
 
-```text
-.
-├── main.tf            # IaC: Definición de recursos en GCP
-├── inventory.ini      # Ansible: Inventario de servidores y variables de conexión
-├── setup_server.yml   # Ansible: Playbook de configuración y despliegue de Docker
-├── .gitignore         # Protección de archivos sensibles (llaves y estados)
-└── keys/
-    └── gcp-auth.json  # Credenciales de Service Account (No trackeado)
-
-🛠️ Requisitos para Ejecución Local:
-    Terraform v1.2.x+
-    Ansible 2.10.x+
-    Archivo de credenciales en keys/gcp-auth.json.
-    Llave privada SSH en ~/.ssh/id_rsa_gcp.
-
-⏭️ Próximos Pasos (Roadmap)
-    Fase 3: Contenedorización: Despliegue de aplicaciones propias mediante Docker Compose.
-    Fase 4: CI/CD: Implementación de pipelines (GitHub Actions) para despliegue automático.
-    Fase 5: Observabilidad: Monitoreo de recursos y logs del sistema.
-
-Autor: Orlando Domínguez – System Technologist & DevOps Learner
+---
+*Desarrollado por **Orlando Dominguez** - Systems Technologist*
