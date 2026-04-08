@@ -16,5 +16,5 @@
 
     - name: Levantar contenedores con Docker Compose (Comando Directo)
       shell:
-        cmd: /usr/bin/docker compose up -d
+        cmd: /usr/bin/docker compose up -d --force-recreate
         chdir: /home/ubuntu/app/
