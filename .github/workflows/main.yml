@@ -3,25 +3,28 @@ name: Deploy to GCP
 on:
   push:
     branches:
-      - main  # Se activa cuando haces push a la rama principal
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout del código
-        uses: actions/checkout@v3
+      - name: 1. Descargar codigo del repositorio
+        uses: actions/checkout@v4
 
-      - name: Configurar llave SSH
+      - name: 2. Configurar llave SSH segura
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.GCP_IP }} >> ~/.ssh/known_hosts
 
-      - name: Desplegar con Ansible
+      - name: 3. Instalar Ansible y Desplegar
         run: |
           pip install ansible
-          # Añadimos -vv para ver exactamente qué hace Ansible si falla
-          ansible-playbook -i "${{ secrets.GCP_IP }}," -u ${{ secrets.GCP_USER }} --private-key ~/.ssh/id_rsa deploy_app.yml -vv
+          # Listamos archivos para verificar rutas en el log de GitHub
+          echo "Verificando archivos en el runner:"
+          ls -R
+          # Ejecutamos el despliegue
+          ansible-playbook -i "${{ secrets.GCP_IP }}," -u ${{ secrets.GCP_USER }} --private-key ~/.ssh/id_rsa deploy_app.yml -v
           

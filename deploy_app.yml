@@ -3,19 +3,24 @@
   hosts: gcp_servers
   become: yes
   tasks:
-    - name: Crear directorio para la aplicacion
+    - name: 1. Limpieza total de versiones previas
+      file:
+        path: /home/ubuntu/app
+        state: absent
+
+    - name: 2. Crear estructura de directorios limpia
       file:
         path: /home/ubuntu/app/html
         state: directory
         mode: '0755'
 
-    - name: Copiar archivos de la aplicacion
+    - name: 3. Copiar archivos frescos desde el repositorio
       copy:
-        src: app/  # Quitamos el ./ para que sea relativo a la raíz del repo
+        src: app/  # Esto copiará el contenido de tu carpeta 'app' local
         dest: /home/ubuntu/app/
-        force: yes # <--- Obliga a sobreescribir si el archivo ya existe
+        force: yes
 
-    - name: Levantar contenedores con Docker Compose
+    - name: 4. Levantar contenedores con Docker Compose
       shell:
         cmd: /usr/bin/docker compose up -d --force-recreate
         chdir: /home/ubuntu/app/
