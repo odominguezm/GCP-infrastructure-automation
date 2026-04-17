@@ -1,6 +1,6 @@
 # 🚀 GCP Infrastructure Automation & CI/CD Pipeline
 
-Este proyecto es un portafolio de automatización que demuestra el despliegue de una infraestructura completa en Google Cloud Platform (GCP) utilizando prácticas de **IaC (Infrastructure as Code)** y **CI/CD**.
+Este proyecto es un portafolio de automatización de alto nivel que demuestra el despliegue de una infraestructura profesional en Google Cloud Platform (GCP) utilizando prácticas de **IaC (Infrastructure as Code)**, **CaC (Configuration as Code)** y **GitOps**.
 
 ## 🛠️ Tecnologías Utilizadas
 
@@ -8,34 +8,36 @@ Este proyecto es un portafolio de automatización que demuestra el despliegue de
 * **IaC:** Terraform
 * **Config Management:** Ansible
 * **Contenedores:** Docker & Docker Compose
-* **CI/CD:** GitHub Actions / GitLab
+* **CI/CD:** GitHub Actions
 * **OS:** Ubuntu Server (Remote) / Linux Workstation (Local)
 
 ## 🏗️ Arquitectura del Proyecto
 
 El flujo de trabajo automatizado sigue estas etapas:
-1.  **Provisionamiento:** Terraform crea la VPC, subredes, instancias de cómputo y reglas de Firewall en GCP.
-2.  **Configuración:** Ansible gestiona el hardening del servidor, instala Docker, Docker Compose y prepara el entorno de ejecución.
-3.  **Despliegue:** Docker Compose levanta un servidor web Nginx personalizado con despliegue de artefactos dinámicos.
-4.  **Automatización:** Cada `git push` a la rama `main` dispara un pipeline que sincroniza el estado de la infraestructura y actualiza el servicio en tiempo real.
+1.  **Provisionamiento:** Terraform gestiona de forma declarativa la VPC, subredes, instancias y reglas de firewall.
+2.  **Configuración:** Ansible aplica playbooks para el hardening del sistema y la preparación del runtime de Docker.
+3.  **Despliegue:** Orquestación de servicios mediante Docker Compose con una estrategia de actualización sin tiempo de inactividad.
+4.  **Automatización:** Pipeline de CI/CD que garantiza que cada cambio en el código se refleje de forma segura en producción.
 
-## 📈 Progreso del Proyecto
+## 📈 Hoja de Ruta del Proyecto (Roadmap)
 
 | Fase | Descripción | Estado |
 | :--- | :--- | :--- |
 | **Fase 1** | Provisionamiento de Infraestructura con Terraform | ✅ Completada |
 | **Fase 2** | Gestión de Configuración con Ansible | ✅ Completada |
 | **Fase 3** | Contenedorización con Docker & Docker Compose | ✅ Completada |
-| **Fase 4** | Pipeline de CI/CD e Integración de Workstation | ✅ Completada |
-| **Fase 5** | Observabilidad, Monitoreo y Métricas | 🕒 En Progreso |
+| **Fase 4** | Integración de Workstation y Pipeline CI/CD | ✅ Completada |
+| **Fase 5** | Observabilidad y Monitoreo (Métricas en tiempo real) | 🕒 En Progreso |
+| **Fase 6** | Seguridad Avanzada: Dominio, SSL/TLS y HTTPS | 📅 Pendiente |
+| **Fase 7** | Continuidad de Negocio: Backup & Disaster Recovery | 📅 Pendiente |
 
-## 🚀 Cómo funciona el CI/CD
+## 🚀 Detalles del Pipeline CI/CD
 
-El pipeline utiliza secretos cifrados para garantizar la seguridad en cada despliegue. Al detectar un cambio en el código:
-1. Se valida la integridad de los manifiestos de Terraform.
-2. Se establece una conexión segura mediante SSH.
-3. Se ejecuta el Playbook de Ansible para sincronizar los archivos de la aplicación.
-4. Se refrescan los contenedores garantizando la disponibilidad del servicio.
+El flujo utiliza secretos cifrados para proteger la integridad de la infraestructura. Al detectar un cambio:
+1. Valida los archivos de configuración.
+2. Establece un túnel seguro vía SSH con llaves RSA.
+3. Ejecuta tareas de Ansible para sincronizar el estado deseado.
+4. Realiza un despliegue "Blue/Green" simplificado mediante el refresco de contenedores.
 
 ---
 **Desarrollado por Orlando Dominguez - Systems Technologist**
