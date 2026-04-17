@@ -60,3 +60,9 @@
         name: docker
         state: started
         enabled: yes
+    
+    - name: Agregar el usuario al grupo docker
+      user:
+        name: orlando_dominguezm
+        groups: docker
+        append: yes

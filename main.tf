@@ -8,7 +8,7 @@ terraform {
 }
 
 provider "google" {
-  credentials = file("keys/gcp-auth.json")
+  #credentials = file("keys/gcp-auth.json")
   project     = "devops-lab-orlando"
   region      = "us-central1"
   zone        = "us-central1-a"
@@ -61,7 +61,7 @@ resource "google_compute_instance" "vm_devops" {
 
   metadata = {
     # Usamos la nueva llave generada
-    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa_gcp.pub")}"
+    ssh-keys = "orlando_dominguezm:${file("~/.ssh/id_rsa_gcp.pub")}"
   }
 }
 

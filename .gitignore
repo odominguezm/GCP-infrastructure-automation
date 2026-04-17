@@ -1,34 +1,62 @@
-# ==========================================
-# SEGURIDAD Y AUTENTICACIÓN
-# ==========================================
-# Llaves de servicio de GCP y JSONs sensibles
-keys/*.json
-*.pem
-*.pub
-id_rsa*
+Aquí tienes el archivo .gitignore optimizado, sin duplicados y con comentarios profesionales estructurados por capas (Infraestructura, Configuración, Secretos y Sistema).
 
-# Inventarios de Ansible (Locales y temporales de GitHub)
-inventory.ini
-inventory_github.ini
+Este orden es ideal para un repositorio de Portafolio, ya que demuestra que tienes un control claro sobre cada herramienta del stack.
 
+Ini, TOML
 # ==========================================
-# TERRAFORM (IaC)
+# 1. INFRAESTRUCTURA (Terraform)
 # ==========================================
-# Directorio de plugins y módulos
+# Directorio local de trabajo (Contiene binarios de providers y módulos)
 .terraform/
 
-# Archivos de estado (Contienen IPs y datos sensibles en texto plano)
+# Archivos de estado (CRÍTICO: Contienen credenciales e IPs en texto plano)
 *.tfstate
 *.tfstate.backup
 
-# Bloqueo de versiones de proveedores
+# Archivos de variables personalizadas (Suelen contener secretos)
+*.tfvars
+*.tfvars.json
+
+# Archivos de bloqueo de dependencias
 .terraform.lock.hcl
 
 # ==========================================
-# ARCHIVOS DEL SISTEMA Y ENTORNO
+# 2. CONFIGURACIÓN Y AUTOMATIZACIÓN (Ansible)
 # ==========================================
-# Específicos de macOS
-.DS_Store
+# Inventarios locales (Contienen IPs de servidores de laboratorio)
+hosts.ini
+inventory.ini
+inventory_github.ini
 
-# Logs de error y temporales
+# Archivos de reintento de Ansible
+*.retry
+
+# ==========================================
+# 3. SEGURIDAD Y SECRETOS (Keys & Auth)
+# ==========================================
+# Directorio de llaves de servicio y certificados
+keys/
+
+# Archivos de llaves privadas y públicas
+id_rsa*
+*.key
+*.pem
+*.pub
+
+# Archivos de credenciales de GCP y otros servicios
+*.json
+
+# ==========================================
+# 4. ENTORNO DE DESARROLLO Y SISTEMA
+# ==========================================
+# Archivos temporales de Editores (VS Code, IntelliJ, Vim)
+.vscode/
+.idea/
+*.swp
+
+# Archivos de sistema operativo (Pop!_OS / macOS)
+.DS_Store
+Thumbs.db
+
+# Logs de depuración y ejecución
 *.log
