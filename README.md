@@ -38,32 +38,28 @@ El ecosistema está diseñado bajo el principio de "Everything as Code" y se div
 ├── deploy_all.yml       # Playbook maestro de Ansible
 ├── ansible.cfg          # Configuración de comportamiento de Ansible
 └── README.md            # Documentación del proyecto
-⚙️ Configuración del Pipeline
-El pipeline está configurado para ejecutarse en cada push a la rama main, realizando las siguientes acciones:
 
-Checkout del código.
+## ⚙️ Configuración del Pipeline
+El pipeline está configurado para ejecutarse en cada `push` a la rama `main`, realizando las siguientes acciones:
 
-Configuración de identidad SSH (RSA con algoritmos de intercambio de llaves específicos).
+1. **Checkout** del código.
+2. **Configuración de identidad SSH** (RSA con algoritmos de intercambio de llaves específicos).
+3. **Despliegue automático** mediante Ansible hacia la instancia de GCP.
 
-Despliegue automático mediante Ansible hacia la instancia de GCP.
-
-📊 Acceso al Entorno
+## 📊 Acceso al Entorno
 Actualmente, el proyecto es accesible de forma segura bajo el dominio:
-🔗 https://devops.dommatt.com
+🔗 [https://devops.dommatt.com](https://devops.dommatt.com)
 
-📈 Roadmap del Proyecto
-[x] Fase 1: Provisionamiento (Terraform)
+---
 
-[x] Fase 2: Configuración (Ansible)
+## 📈 Roadmap del Proyecto
+* [x] **Fase 1:** Provisionamiento (Terraform)
+* [x] **Fase 2:** Gestión de Configuración (Ansible)
+* [x] **Fase 3:** Contenedorización (Docker & Docker Compose)
+* [x] **Fase 4:** Integración de Workstation y Pipeline CI/CD
+* [x] **Fase 5:** Observabilidad y Monitoreo (Métricas en tiempo real)
+* [x] **Fase 6:** Seguridad Avanzada (SSL/Dominio)
+* [ ] **Fase 7:** Continuidad de Negocio (Backups & Disaster Recovery) - **EN PROGRESO**
 
-[x] Fase 3: Contenedorización (Docker)
-
-[x] Fase 4: Pipeline CI/CD (GitHub Actions)
-
-[x] Fase 5: Observabilidad (Prometheus/Grafana)
-
-[x] Fase 6: Seguridad (SSL/Dominio)
-
-[ ] Fase 7: Continuidad de Negocio (Backups & Disaster Recovery) - EN PROGRESO
-
-Autor: Orlando Domínguez – Systems Technologist
+---
+**Autor:** Orlando Domínguez – Systems Technologist
