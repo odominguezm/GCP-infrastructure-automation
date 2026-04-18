@@ -23,10 +23,8 @@ jobs:
           echo "    KexAlgorithms +ecdh-sha2-nistp256" >> ~/.ssh/config
 
       - name: Run Ansible Playbook
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: "False"
         run: |
           ansible-playbook -i hosts.ini site.yml \
-          -u ${{ secrets.GCP_SSH_USER }} \
+          -u "${{ secrets.GCP_SSH_USER }}" \
           --private-key ~/.ssh/id_rsa \
           -e "ansible_python_interpreter=/usr/bin/python3"
