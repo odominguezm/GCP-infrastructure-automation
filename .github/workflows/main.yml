@@ -25,12 +25,8 @@ jobs:
           
           # Generamos el inventario
           echo "[gcp_servers]" > inventory_github.ini
-          # Forzamos la ruta de la llave que crea la acción por defecto (~/.ssh/id_rsa)
           echo "${{ secrets.GCP_IP }} ansible_user=${{ secrets.GCP_USER }} ansible_ssh_private_key_file=~/.ssh/id_rsa" >> inventory_github.ini
           
-          echo "Verificando inventario:"
-          cat inventory_github.ini
-          
-          # Ejecutamos el playbook con un argumento extra para ignorar la verificación estricta de host
+          # Ejecutamos con -vvv para ver el rastro del error de SSH
           ansible-playbook -i inventory_github.ini deploy_all.yml \
-            --ssh-common-args='-o StrictHostKeyChecking=no' -v
+            --ssh-common-args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' -vvv
