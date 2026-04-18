@@ -27,23 +27,25 @@ resource "google_compute_subnetwork" "subnet_devops" {
   network       = google_compute_network.vpc_devops.id
 }
 
-# 3. Regla de Firewall para SSH
+# Regla de Firewall para Acceso General y Monitoreo
 resource "google_compute_firewall" "ssh_rule" {
-  name    = "allow-ssh"
+  name    = "allow-ssh-http-monitoring"
   network = google_compute_network.vpc_devops.name
 
   allow {
     protocol = "tcp"
-    ports    = ["22", "80", "443"] # Permitir SSH, HTTP y HTTPS
+    # 22: SSH, 80: HTTP, 443: HTTPS, 3000: Grafana, 9090: Prometheus
+    ports    = ["22", "80", "443", "3000", "9090"] 
   }
 
   source_ranges = ["0.0.0.0/0"]
 }
-
 # 4. Instancia Always Free (e2-micro)
 resource "google_compute_instance" "vm_devops" {
   name         = "instancia-devops-gcp"
   machine_type = "e2-micro" # Capa gratuita de por vida en us-central1
+
+  tags = ["ssh-server", "http-server", "monitoring-server"]
 
   boot_disk {
     initialize_params {

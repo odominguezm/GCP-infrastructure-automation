@@ -1,0 +1,29 @@
+---
+- name: Desplegar Stack de Monitoreo (Prometheus + Grafana)
+  hosts: gcp_servers
+  become: yes
+
+  tasks:
+    - name: 1. Asegurar que el plugin de Docker Compose V2 esté presente
+      apt:
+        name: 
+          - docker-compose-plugin
+          - python3-docker
+        state: present
+        update_cache: yes
+
+    - name: 2. Crear directorio de monitoreo en el servidor
+      file:
+        path: /home/{{ ansible_user }}/monitoring/prometheus
+        state: directory
+        mode: '0755'
+
+    - name: 3. Copiar archivos de configuración
+      copy:
+        src: ./monitoring/
+        dest: /home/{{ ansible_user }}/monitoring/
+
+    - name: 4. Levantar el stack con Docker Compose V2
+      community.docker.docker_compose_v2:
+        project_src: /home/{{ ansible_user }}/monitoring/
+        state: present
