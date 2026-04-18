@@ -22,9 +22,13 @@ jobs:
           echo "    StrictHostKeyChecking no" >> ~/.ssh/config
           echo "    KexAlgorithms +ecdh-sha2-nistp256" >> ~/.ssh/config
 
+      - name: List files for debugging
+        run: ls -R  # Esto nos dirá exactamente dónde está el playbook
+
       - name: Run Ansible Playbook
         run: |
+          # Si el archivo está en la raíz, se corre así:
           ansible-playbook -i hosts.ini site.yml \
-          -u "${{ secrets.GCP_SSH_USER }}" \
+          -u ubuntu \
           --private-key ~/.ssh/id_rsa \
           -e "ansible_python_interpreter=/usr/bin/python3"
