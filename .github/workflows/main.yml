@@ -9,24 +9,24 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Descargar codigo del repositorio
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 2. Configurar llave SSH segura (Optimizado)
-        uses: shimataro/ssh-key-action@v2
-        with:
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          known_hosts: ${{ secrets.GCP_KNOWN_HOSTS }}
-          if_key_exists: replace
-
-      - name: 3. Instalar Ansible y Desplegar
+      - name: Setup SSH
         run: |
-          pip install ansible
-          
-          # Creamos el inventario apuntando directamente a la llave inyectada
-          echo "[gcp_servers]" > inventory_github.ini
-          echo "${{ secrets.GCP_IP }} ansible_user=${{ secrets.GCP_USER }} ansible_ssh_private_key_file=$HOME/.ssh/id_rsa" >> inventory_github.ini
-          
-          # Ejecutamos con una configuración de SSH más simple
-          ansible-playbook -i inventory_github.ini deploy_all.yml \
-            --ssh-common-args='-o StrictHostKeyChecking=no' -v
+          mkdir -p ~/.ssh
+          echo "${{ secrets.GCP_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          # Añadimos la configuración de red necesaria
+          echo "Host *" > ~/.ssh/config
+          echo "    StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "    KexAlgorithms +ecdh-sha2-nistp256" >> ~/.ssh/config
+
+      - name: Run Ansible Playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+        run: |
+          ansible-playbook -i hosts.ini site.yml \
+          -u ${{ secrets.GCP_SSH_USER }} \
+          --private-key ~/.ssh/id_rsa \
+          -e "ansible_python_interpreter=/usr/bin/python3"
