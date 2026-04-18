@@ -25,23 +25,8 @@ jobs:
 
       - name: Run Ansible Playbook
         run: |
-          # Buscamos dónde está el archivo site.yml exactamente
-          PLAYBOOK_PATH=$(find . -name "site.yml" | head -n 1)
-          
-          if [ -z "$PLAYBOOK_PATH" ]; then
-            echo "ERROR: No se encontró el archivo site.yml en ninguna carpeta del repositorio."
-            ls -R
-            exit 1
-          fi
-          
-          echo "Playbook encontrado en: $PLAYBOOK_PATH"
-          
-          # Obtenemos el directorio donde está el playbook
-          PLAYBOOK_DIR=$(dirname "$PLAYBOOK_PATH")
-          cd "$PLAYBOOK_DIR"
-          
-          # Ejecutamos Ansible desde esa carpeta
-          ansible-playbook -i hosts.ini site.yml \
+          # Usamos ubuntu, tu IP fija y el playbook que SI existe: deploy_all.yml
+          ansible-playbook -i "${{ secrets.GCP_IP }}," deploy_all.yml \
             -u ubuntu \
             --private-key ~/.ssh/id_rsa \
             -e "ansible_python_interpreter=/usr/bin/python3"
