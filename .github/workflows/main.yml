@@ -17,18 +17,15 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.GCP_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          # Añadimos la configuración de red necesaria
-          echo "Host *" > ~/.ssh/config
-          echo "    StrictHostKeyChecking no" >> ~/.ssh/config
-          echo "    KexAlgorithms +ecdh-sha2-nistp256" >> ~/.ssh/config
+          cat <<EOF > ~/.ssh/config
+          Host *
+              StrictHostKeyChecking no
+              KexAlgorithms +ecdh-sha2-nistp256
+          EOF
 
       - name: List files for debugging
-        run: ls -R  # Esto nos dirá exactamente dónde está el playbook
+        run: ls -R
 
       - name: Run Ansible Playbook
         run: |
-          # Si el archivo está en la raíz, se corre así:
-          ansible-playbook -i hosts.ini site.yml \
-          -u ubuntu \
-          --private-key ~/.ssh/id_rsa \
-          -e "ansible_python_interpreter=/usr/bin/python3"
+          ansible-playbook -i hosts.ini site.yml -u ubuntu --private-key ~/.ssh/id_rsa -e "ansible_python_interpreter=/usr/bin/python3"
