@@ -1,43 +1,69 @@
-# 🚀 GCP Infrastructure Automation & CI/CD Pipeline
+# GCP Infrastructure Automation & Observability Stack
 
-Este proyecto es un portafolio de automatización de alto nivel que demuestra el despliegue de una infraestructura profesional en Google Cloud Platform (GCP) utilizando prácticas de **IaC (Infrastructure as Code)**, **CaC (Configuration as Code)** y **GitOps**.
+Este repositorio contiene la arquitectura completa de una infraestructura escalable en **Google Cloud Platform**, desplegada mediante **IaC (Terraform)**, configurada con **Ansible** y gestionada a través de un pipeline de **CI/CD con GitHub Actions**.
 
-## 🛠️ Tecnologías Utilizadas
+El proyecto demuestra habilidades avanzadas en automatización de infraestructura, seguridad (SSL/TLS), observabilidad y gestión de contenedores.
 
-* **Cloud:** Google Cloud Platform (GCP)
-* **IaC:** Terraform
-* **Config Management:** Ansible
-* **Contenedores:** Docker & Docker Compose
-* **CI/CD:** GitHub Actions
-* **OS:** Ubuntu Server (Remote) / Linux Workstation (Local)
+## 🚀 Arquitectura del Proyecto
 
-## 🏗️ Arquitectura del Proyecto
+El ecosistema está diseñado bajo el principio de "Everything as Code" y se divide en las siguientes capas:
 
-El flujo de trabajo automatizado sigue estas etapas:
-1.  **Provisionamiento:** Terraform gestiona de forma declarativa la VPC, subredes, instancias y reglas de firewall.
-2.  **Configuración:** Ansible aplica playbooks para el hardening del sistema y la preparación del runtime de Docker.
-3.  **Despliegue:** Orquestación de servicios mediante Docker Compose con una estrategia de actualización sin tiempo de inactividad.
-4.  **Automatización:** Pipeline de CI/CD que garantiza que cada cambio en el código se refleje de forma segura en producción.
+* **Infraestructura (IaC):** Google Cloud Platform (VPC, Compute Engine, Firewall Rules) gestionado con **Terraform**.
+* **Configuración (CaC):** Automatización del sistema operativo y despliegue de servicios con **Ansible**.
+* **Orquestación:** Contenedores gestionados con **Docker & Docker Compose**.
+* **CI/CD:** Pipeline automatizado en **GitHub Actions** para despliegues continuos.
+* **Observabilidad:** Stack de monitoreo con **Prometheus, Grafana y Node Exporter**.
+* **Networking & Seguridad:** Reverse Proxy con **Nginx Proxy Manager** y certificados **SSL/TLS (Let's Encrypt)**.
 
-## 📈 Hoja de Ruta del Proyecto (Roadmap)
+## 🛠️ Stack Tecnológico
 
-| Fase | Descripción | Estado |
-| :--- | :--- | :--- |
-| **Fase 1** | Provisionamiento de Infraestructura con Terraform | ✅ Completada |
-| **Fase 2** | Gestión de Configuración con Ansible | ✅ Completada |
-| **Fase 3** | Contenedorización con Docker & Docker Compose | ✅ Completada |
-| **Fase 4** | Integración de Workstation y Pipeline CI/CD | ✅ Completada |
-| **Fase 5** | Observabilidad y Monitoreo (Métricas en tiempo real) | 🕒 En Progreso |
-| **Fase 6** | Seguridad Avanzada: Dominio, SSL/TLS y HTTPS | 📅 Pendiente |
-| **Fase 7** | Continuidad de Negocio: Backup & Disaster Recovery | 📅 Pendiente |
+| Herramienta | Función |
+| :--- | :--- |
+| **GCP** | Proveedor de nube pública. |
+| **Terraform** | Aprovisionamiento de infraestructura. |
+| **Ansible** | Gestión de configuración y despliegue de apps. |
+| **Docker** | Contenedorización de microservicios. |
+| **GitHub Actions** | Automatización de despliegue (Pipeline). |
+| **NPM** | Gestión de dominios y terminación SSL. |
+| **Stack TIG** | Monitoreo y métricas en tiempo real. |
 
-## 🚀 Detalles del Pipeline CI/CD
+## 📦 Estructura del Repositorio
 
-El flujo utiliza secretos cifrados para proteger la integridad de la infraestructura. Al detectar un cambio:
-1. Valida los archivos de configuración.
-2. Establece un túnel seguro vía SSH con llaves RSA.
-3. Ejecuta tareas de Ansible para sincronizar el estado deseado.
-4. Realiza un despliegue "Blue/Green" simplificado mediante el refresco de contenedores.
+```bash
+├── .github/workflows/   # Definición del pipeline de CI/CD
+├── app/                 # Código y Docker Compose de la aplicación web
+├── monitoring/          # Configuración de Prometheus y Grafana
+├── proxy/               # Nginx Proxy Manager setup
+├── main.tf              # Definición de infraestructura en Terraform
+├── deploy_all.yml       # Playbook maestro de Ansible
+├── ansible.cfg          # Configuración de comportamiento de Ansible
+└── README.md            # Documentación del proyecto
+⚙️ Configuración del Pipeline
+El pipeline está configurado para ejecutarse en cada push a la rama main, realizando las siguientes acciones:
 
----
-**Desarrollado por Orlando Dominguez - Systems Technologist**
+Checkout del código.
+
+Configuración de identidad SSH (RSA con algoritmos de intercambio de llaves específicos).
+
+Despliegue automático mediante Ansible hacia la instancia de GCP.
+
+📊 Acceso al Entorno
+Actualmente, el proyecto es accesible de forma segura bajo el dominio:
+🔗 https://devops.dommatt.com
+
+📈 Roadmap del Proyecto
+[x] Fase 1: Provisionamiento (Terraform)
+
+[x] Fase 2: Configuración (Ansible)
+
+[x] Fase 3: Contenedorización (Docker)
+
+[x] Fase 4: Pipeline CI/CD (GitHub Actions)
+
+[x] Fase 5: Observabilidad (Prometheus/Grafana)
+
+[x] Fase 6: Seguridad (SSL/Dominio)
+
+[ ] Fase 7: Continuidad de Negocio (Backups & Disaster Recovery) - EN PROGRESO
+
+Autor: Orlando Domínguez – Systems Technologist
