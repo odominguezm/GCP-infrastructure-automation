@@ -12,23 +12,21 @@ jobs:
       - name: 1. Descargar codigo del repositorio
         uses: actions/checkout@v4
 
-      - name: 2. Configurar llave SSH segura
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.GCP_IP }} >> ~/.ssh/known_hosts
+      - name: 2. Configurar llave SSH segura (Optimizado)
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          known_hosts: ${{ secrets.GCP_KNOWN_HOSTS }}
+          if_key_exists: replace
 
       - name: 3. Instalar Ansible y Desplegar
         run: |
           pip install ansible
-          # Creamos el inventario con el nombre de grupo [gcp_servers]
+          
+          # Generamos el inventario dinámico apuntando a tu IP de GCP
           echo "[gcp_servers]" > inventory_github.ini
-          echo "${{ secrets.GCP_IP }} ansible_user=${{ secrets.GCP_USER }} ansible_ssh_private_key_file=~/.ssh/id_rsa ansible_ssh_common_args='-o StrictHostKeyChecking=no'" >> inventory_github.ini
+          echo "${{ secrets.GCP_IP }} ansible_user=${{ secrets.GCP_USER }}" >> inventory_github.ini
           
-          echo "Verificando inventario creado:"
-          cat inventory_github.ini
-          
-          # Ejecutamos el despliegue
-          ansible-playbook -i inventory_github.ini deploy_app.yml -v
-          
+          # Ejecutamos el playbook 'deploy_all.yml' que ya incluye la creación del SWAP
+          # No necesitamos pasar la llave manualmente, Ansible usará el agente SSH configurado arriba
+          ansible-playbook -i inventory_github.ini deploy_all.yml -v

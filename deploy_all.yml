@@ -1,10 +1,33 @@
 ---
-- name: Restaurar Infraestructura Completa
+- name: Restaurar y Optimizar Infraestructura Completa
   hosts: gcp_servers
   become: yes
 
   tasks:
-    - name: 1. Asegurar directorios de proyectos
+    # --- SECCIÓN DE OPTIMIZACIÓN DE RENDIMIENTO ---
+    - name: 1. Crear archivo SWAP de 2GB (Para mitigar los 1GB de RAM)
+      command: "{{ item }}"
+      with_items:
+        - fallocate -l 2G /swapfile
+        - chmod 600 /swapfile
+        - mkswap /swapfile
+        - swapon /swapfile
+      args:
+        creates: /swapfile # Solo se ejecuta si el archivo no existe
+
+    - name: 2. Hacer el SWAP permanente y ajustar swappiness
+      block:
+        - lineinfile:
+            path: /etc/fstab
+            line: '/swapfile none swap sw 0 0'
+            state: present
+        - sysctl:
+            name: vm.swappiness
+            value: '10'
+            state: present
+
+    # --- SECCIÓN DE ESTRUCTURA Y ARCHIVOS ---
+    - name: 3. Asegurar directorios de proyectos
       file:
         path: "/home/{{ ansible_user }}/{{ item }}"
         state: directory
@@ -13,7 +36,7 @@
         - monitoring
         - proxy
 
-    - name: 2. Corregir permisos para Prometheus
+    - name: 4. Corregir permisos para Prometheus
       file:
         path: "/home/{{ ansible_user }}/monitoring/prometheus_data"
         state: directory
@@ -22,7 +45,7 @@
         mode: '0777'
         recurse: yes
 
-    - name: 3. Sincronizar archivos de configuración
+    - name: 5. Sincronizar archivos de configuración
       copy:
         src: "{{ item.src }}"
         dest: "{{ item.dest }}"
@@ -30,12 +53,13 @@
         - { src: "./monitoring/", dest: "/home/{{ ansible_user }}/monitoring/" }
         - { src: "./proxy/", dest: "/home/{{ ansible_user }}/proxy/" }
 
-    - name: 4. Levantar Stack de Monitoreo
+    # --- SECCIÓN DE DESPLIEGUE ---
+    - name: 6. Levantar Stack de Monitoreo
       community.docker.docker_compose_v2:
         project_src: "/home/{{ ansible_user }}/monitoring/"
         state: present
 
-    - name: 5. Levantar Nginx Proxy Manager
+    - name: 7. Levantar Nginx Proxy Manager
       community.docker.docker_compose_v2:
         project_src: "/home/{{ ansible_user }}/proxy/"
         state: present
