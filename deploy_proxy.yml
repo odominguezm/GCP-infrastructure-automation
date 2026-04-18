@@ -1,0 +1,21 @@
+---
+- name: Desplegar Nginx Proxy Manager
+  hosts: gcp_servers
+  become: yes
+
+  tasks:
+    - name: 1. Crear directorio para el Proxy
+      file:
+        path: /home/{{ ansible_user }}/proxy
+        state: directory
+        mode: '0755'
+
+    - name: 2. Copiar configuración de Docker Compose
+      copy:
+        src: ./proxy/
+        dest: /home/{{ ansible_user }}/proxy/
+
+    - name: 3. Levantar Proxy con Docker Compose V2
+      community.docker.docker_compose_v2:
+        project_src: /home/{{ ansible_user }}/proxy/
+        state: present

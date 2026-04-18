@@ -2,7 +2,7 @@ services:
   web:
     image: nginx:latest
     ports:
-      - "80:80"
+      - "21680:80"
     volumes:
       - ./html:/usr/share/nginx/html
     restart: always

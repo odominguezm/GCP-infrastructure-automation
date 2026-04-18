@@ -35,7 +35,7 @@ resource "google_compute_firewall" "ssh_rule" {
   allow {
     protocol = "tcp"
     # 22: SSH, 80: HTTP, 443: HTTPS, 3000: Grafana, 9090: Prometheus
-    ports    = ["22", "80", "443", "3000", "9090"] 
+    ports    = ["22", "80", "81", "443", "3000", "9090", "21680"] 
   }
 
   source_ranges = ["0.0.0.0/0"]
