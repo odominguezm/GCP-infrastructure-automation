@@ -23,10 +23,10 @@ jobs:
         run: |
           pip install ansible
           
-          # Generamos el inventario
+          # Creamos el inventario apuntando directamente a la llave inyectada
           echo "[gcp_servers]" > inventory_github.ini
-          echo "${{ secrets.GCP_IP }} ansible_user=${{ secrets.GCP_USER }} ansible_ssh_private_key_file=~/.ssh/id_rsa" >> inventory_github.ini
+          echo "${{ secrets.GCP_IP }} ansible_user=${{ secrets.GCP_USER }} ansible_ssh_private_key_file=$HOME/.ssh/id_rsa" >> inventory_github.ini
           
-          # Ejecutamos con -vvv para ver el rastro del error de SSH
+          # Ejecutamos con una configuración de SSH más simple
           ansible-playbook -i inventory_github.ini deploy_all.yml \
-            --ssh-common-args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' -vvv
+            --ssh-common-args='-o StrictHostKeyChecking=no' -v
