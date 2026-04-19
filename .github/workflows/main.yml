@@ -31,9 +31,10 @@ jobs:
 
       - name: Run Ansible Playbook
         run: |
+          # Añadimos el argumento para forzar el uso del agente SSH
           ansible-playbook -i "${{ secrets.GCP_IP }}," deploy_all.yml \
             -u ${{ secrets.GCP_USER }} \
-            --private-key ~/.ssh/id_rsa_gcp \
+            --ssh-common-args="-o StrictHostKeyChecking=no -o ForwardAgent=yes" \
             -e "ansible_python_interpreter=/usr/bin/python3"
       - name: Run Ansible Playbook
         run: |
