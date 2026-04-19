@@ -12,15 +12,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install SSH Key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Add host to known_hosts
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
+          # Escribimos la llave físicamente tal cual la tienes en tu máquina
+          printf "%s" "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa_gcp
+          chmod 600 ~/.ssh/id_rsa_gcp
+          
+          # Escaneamos la IP para que GitHub no sospeche de la conexión
           ssh-keyscan -H ${{ secrets.GCP_IP }} >> ~/.ssh/known_hosts
+          
+          # Creamos el config para que Ansible no tenga que adivinar la llave
+          cat <<EOF > ~/.ssh/config
+          Host ${{ secrets.GCP_IP }}
+              IdentityFile ~/.ssh/id_rsa_gcp
+              User ${{ secrets.GCP_USER }}
+              StrictHostKeyChecking no
+          EOF
+
+      - name: Run Ansible Playbook
+        run: |
+          # Ahora ejecutamos el playbook forzando la ruta de la llave que acabamos de crear
+          ansible-playbook -i "${{ secrets.GCP_IP }}," deploy_all.yml \
+            -u ${{ secrets.GCP_USER }} \
+            --private-key ~/.ssh/id_rsa_gcp \
+            -e "ansible_python_interpreter=/usr/bin/python3"
 
       - name: Run Ansible Playbook
         run: |
