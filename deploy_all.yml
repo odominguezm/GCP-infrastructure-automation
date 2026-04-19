@@ -55,15 +55,16 @@
         mode: '0777'
         recurse: yes
 
-    - name: 5. Sincronizar archivos de configuración
+    - name: 5. Sincronizar archivos de configuración (MODO SEGURO)
       copy:
         src: "{{ item.src }}"
         dest: "{{ deploy_path }}/{{ item.dest }}"
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
       loop:
-        - { src: "./monitoring/", dest: "monitoring/" }
-        - { src: "./proxy/", dest: "proxy/" }
+        # Copiamos solo los archivos de definición, NO las carpetas de datos
+        - { src: "./monitoring/docker-compose.yml", dest: "monitoring/docker-compose.yml" }
+        - { src: "./proxy/docker-compose.yml", dest: "proxy/docker-compose.yml" }
 
     # --- SECCIÓN DE DESPLIEGUE ---
     - name: 6. Levantar Stack de Monitoreo
