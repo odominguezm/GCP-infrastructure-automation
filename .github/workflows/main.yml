@@ -15,47 +15,25 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          # Escribimos la llave físicamente tal cual la tienes en tu máquina
-          printf "%s" "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa_gcp
-          chmod 600 ~/.ssh/id_rsa_gcp
+          # Escribimos la nueva llave ED25519 (que es más corta y no se corrompe)
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_github_actions
+          chmod 600 ~/.ssh/id_github_actions
           
-          # Escaneamos la IP para que GitHub no sospeche de la conexión
+          # Escaneamos la IP para evitar el error de "Host key verification failed"
           ssh-keyscan -H ${{ secrets.GCP_IP }} >> ~/.ssh/known_hosts
           
-          # Creamos el config para que Ansible no tenga que adivinar la llave
+          # Configuramos SSH para que siempre use esta nueva identidad
           cat <<EOF > ~/.ssh/config
-          Host ${{ secrets.GCP_IP }}
-              IdentityFile ~/.ssh/id_rsa_gcp
-              User ${{ secrets.GCP_USER }}
+          Host *
+              IdentityFile ~/.ssh/id_github_actions
               StrictHostKeyChecking no
           EOF
 
       - name: Run Ansible Playbook
         run: |
-          # Ahora ejecutamos el playbook forzando la ruta de la llave que acabamos de crear
+          # Un solo paso de Ansible usando la llave id_github_actions
+          # Usamos tus secretos: GCP_IP, GCP_USER y la ruta de la nueva llave
           ansible-playbook -i "${{ secrets.GCP_IP }}," deploy_all.yml \
             -u ${{ secrets.GCP_USER }} \
-            --private-key ~/.ssh/id_rsa_gcp \
-            -e "ansible_python_interpreter=/usr/bin/python3"
-
-      - name: Run Ansible Playbook
-        run: |
-          # Al usar ssh-agent, ya no necesitas pasar --private-key
-          ansible-playbook -i "${{ secrets.GCP_IP }}," deploy_all.yml \
-            -u ${{ secrets.GCP_USER }} \
-            -e "ansible_python_interpreter=/usr/bin/python3"
-
-      - name: Run Ansible Playbook
-        run: |
-          # Añadimos el argumento para forzar el uso del agente SSH
-          ansible-playbook -i "${{ secrets.GCP_IP }}," deploy_all.yml \
-            -u ${{ secrets.GCP_USER }} \
-            --ssh-common-args="-o StrictHostKeyChecking=no -o ForwardAgent=yes" \
-            -e "ansible_python_interpreter=/usr/bin/python3"
-      - name: Run Ansible Playbook
-        run: |
-          # Usamos los nombres exactos de tus secretos: GCP_IP y GCP_USER
-          ansible-playbook -i "${{ secrets.GCP_IP }}," deploy_all.yml \
-            -u ${{ secrets.GCP_USER }} \
-            --private-key ~/.ssh/id_rsa_gcp \
+            --private-key ~/.ssh/id_github_actions \
             -e "ansible_python_interpreter=/usr/bin/python3"
