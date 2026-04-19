@@ -1,19 +1,27 @@
 ---
 - name: Restaurar y Optimizar Infraestructura Completa
-  hosts: all  # Cambiado a 'all' para que GitHub Actions lo reconozca siempre
+  hosts: all
   become: yes
+  vars:
+    # Definimos el usuario explícitamente para evitar errores de variable indefinida
+    deploy_user: "ubuntu"
+    deploy_path: "/home/ubuntu"
 
   tasks:
     # --- SECCIÓN DE OPTIMIZACIÓN DE RENDIMIENTO ---
-    - name: 1. Crear archivo SWAP de 2GB (Para mitigar los 1GB de RAM)
-      command: "{{ item }}"
-      with_items:
-        - fallocate -l 2G /swapfile
-        - chmod 600 /swapfile
-        - mkswap /swapfile
-        - swapon /swapfile
-      args:
-        creates: /swapfile 
+    - name: 1. Gestionar archivo SWAP de 2GB
+      block:
+        - name: Crear archivo swap si no existe
+          command: fallocate -l 2G /swapfile
+          args:
+            creates: /swapfile
+
+        - name: Configurar permisos y activar swap
+          shell: |
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+          when: ansible_swaptotal_mb < 500  # Solo actúa si no hay swap activa
 
     - name: 2. Hacer el SWAP permanente y ajustar swappiness
       block:
@@ -29,8 +37,10 @@
     # --- SECCIÓN DE ESTRUCTURA Y ARCHIVOS ---
     - name: 3. Asegurar directorios de proyectos
       file:
-        path: "/home/{{ ansible_user }}/{{ item }}"
+        path: "{{ deploy_path }}/{{ item }}"
         state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
         mode: '0755'
       loop:
         - monitoring
@@ -38,7 +48,7 @@
 
     - name: 4. Corregir permisos para Prometheus
       file:
-        path: "/home/{{ ansible_user }}/monitoring/prometheus_data"
+        path: "{{ deploy_path }}/monitoring/prometheus_data"
         state: directory
         owner: "65534"
         group: "65534"
@@ -48,18 +58,20 @@
     - name: 5. Sincronizar archivos de configuración
       copy:
         src: "{{ item.src }}"
-        dest: "{{ item.dest }}"
+        dest: "{{ deploy_path }}/{{ item.dest }}"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
       loop:
-        - { src: "./monitoring/", dest: "/home/{{ ansible_user }}/monitoring/" }
-        - { src: "./proxy/", dest: "/home/{{ ansible_user }}/proxy/" }
+        - { src: "./monitoring/", dest: "monitoring/" }
+        - { src: "./proxy/", dest: "proxy/" }
 
     # --- SECCIÓN DE DESPLIEGUE ---
     - name: 6. Levantar Stack de Monitoreo
       community.docker.docker_compose_v2:
-        project_src: "/home/{{ ansible_user }}/monitoring/"
+        project_src: "{{ deploy_path }}/monitoring/"
         state: present
 
     - name: 7. Levantar Nginx Proxy Manager
       community.docker.docker_compose_v2:
-        project_src: "/home/{{ ansible_user }}/proxy/"
+        project_src: "{{ deploy_path }}/proxy/"
         state: present
