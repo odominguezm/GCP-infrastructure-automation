@@ -1,0 +1,47 @@
+---
+- name: Configurar SWAP para optimización de costos
+  hosts: all
+  become: yes
+  vars:
+    swap_file_path: /swapfile
+    swap_size_gb: "4"  # 2GB es ideal para una e2-micro
+
+  tasks:
+    - name: Verificar si el archivo swap ya existe
+      stat:
+        path: "{{ swap_file_path }}"
+      register: swap_file_check
+
+    - name: Crear archivo swap
+      command: "fallocate -l {{ swap_size_gb }}G {{ swap_file_path }}"
+      when: not swap_file_check.stat.exists
+
+    - name: Establecer permisos correctos a la swap
+      file:
+        path: "{{ swap_file_path }}"
+        mode: '0600'
+      when: not swap_file_check.stat.exists
+
+    - name: Formatear el archivo como swap
+      command: "mkswap {{ swap_file_path }}"
+      when: not swap_file_check.stat.exists
+
+    - name: Activar el archivo swap
+      command: "swapon {{ swap_file_path }}"
+      when: not swap_file_check.stat.exists
+
+    - name: Hacer la swap persistente en /etc/fstab
+      mount:
+        name: none
+        src: "{{ swap_file_path }}"
+        fstype: swap
+        opts: sw
+        passno: 0
+        dump: 0
+        state: present
+
+    - name: Ajustar el valor de swappiness (optimización)
+      sysctl:
+        name: vm.swappiness
+        value: '10'
+        state: present

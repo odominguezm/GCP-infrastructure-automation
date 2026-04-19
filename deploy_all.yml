@@ -1,6 +1,6 @@
 ---
 - name: Restaurar y Optimizar Infraestructura Completa
-  hosts: gcp_servers
+  hosts: all  # Cambiado a 'all' para que GitHub Actions lo reconozca siempre
   become: yes
 
   tasks:
@@ -13,7 +13,7 @@
         - mkswap /swapfile
         - swapon /swapfile
       args:
-        creates: /swapfile # Solo se ejecuta si el archivo no existe
+        creates: /swapfile 
 
     - name: 2. Hacer el SWAP permanente y ajustar swappiness
       block:
