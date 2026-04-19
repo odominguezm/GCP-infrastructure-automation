@@ -15,17 +15,24 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          # Las comillas dobles son vitales para mantener los saltos de línea del formato PEM
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa_gcp
-          chmod 600 ~/.ssh/id_rsa
+          # Usamos printf para que el formato PEM de SSH_PRIVATE_KEY se mantenga intacto
+          printf "%s" "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa_gcp
+          chmod 600 ~/.ssh/id_rsa_gcp
           
-          # Esto evita el error de "Host key verification failed"
+          # Escaneamos la IP para evitar el error de "Host key verification failed"
           ssh-keyscan -H ${{ secrets.GCP_IP }} >> ~/.ssh/known_hosts
+          
+          # Creamos un config de SSH para asegurar que use siempre la llave correcta
+          cat <<EOF > ~/.ssh/config
+          Host *
+              StrictHostKeyChecking no
+              IdentityFile ~/.ssh/id_rsa_gcp
+          EOF
 
       - name: Run Ansible Playbook
         run: |
-          # Usamos ubuntu, tu IP fija y el playbook que SI existe: deploy_all.yml
+          # Usamos los nombres exactos de tus secretos: GCP_IP y GCP_USER
           ansible-playbook -i "${{ secrets.GCP_IP }}," deploy_all.yml \
-            -u ubuntu \
+            -u ${{ secrets.GCP_USER }} \
             --private-key ~/.ssh/id_rsa_gcp \
             -e "ansible_python_interpreter=/usr/bin/python3"
