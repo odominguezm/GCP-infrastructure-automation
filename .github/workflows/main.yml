@@ -15,12 +15,18 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
+          # Usamos comillas dobles para que el secreto mantenga sus saltos de línea
           echo "${{ secrets.GCP_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          # Aseguramos que termine con una línea en blanco (vital para libcrypto)
+          echo "" >> ~/.ssh/id_rsa 
           chmod 600 ~/.ssh/id_rsa
+          
+          # Configuración de compatibilidad
           cat <<EOF > ~/.ssh/config
           Host *
               StrictHostKeyChecking no
               KexAlgorithms +ecdh-sha2-nistp256
+              PubkeyAuthentication yes
           EOF
 
       - name: Run Ansible Playbook
