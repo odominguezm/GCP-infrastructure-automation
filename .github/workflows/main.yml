@@ -12,21 +12,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          # Decodificamos la llave de Base64 para que recupere su formato original perfecto
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" | base64 -d > ~/.ssh/id_rsa_gcp
-          chmod 600 ~/.ssh/id_rsa_gcp
-          
-          ssh-keyscan -H ${{ secrets.GCP_IP }} >> ~/.ssh/known_hosts
-          
-          cat <<EOF > ~/.ssh/config
-          Host *
-              StrictHostKeyChecking no
-              IdentityFile ~/.ssh/id_rsa_gcp
-          EOF
+      - name: Install SSH Key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          name: id_rsa_gcp # Nombre exacto que ya definimos
+          known_hosts: ${{ secrets.GCP_KNOWN_HOSTS }} # Usa tu secreto o quita la línea si prefieres
+          if_key_exists: replace
 
+      - name: Add host to known_hosts
+        run: ssh-keyscan -H ${{ secrets.GCP_IP }} >> ~/.ssh/known_hosts
+
+      - name: Run Ansible Playbook
+        run: |
+          ansible-playbook -i "${{ secrets.GCP_IP }}," deploy_all.yml \
+            -u ${{ secrets.GCP_USER }} \
+            --private-key ~/.ssh/id_rsa_gcp \
+            -e "ansible_python_interpreter=/usr/bin/python3"
       - name: Run Ansible Playbook
         run: |
           # Usamos los nombres exactos de tus secretos: GCP_IP y GCP_USER
