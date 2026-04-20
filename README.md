@@ -1,65 +1,60 @@
-# GCP Infrastructure Automation & Observability Stack
+🚀 GCP DevOps Infrastructure Automation
+Este proyecto implementa una infraestructura automatizada en Google Cloud Platform (GCP) bajo el paradigma de Infrastructure as Code (IaC) y CI/CD, optimizada para ejecutarse en entornos de bajos recursos (Always Free Tier).
 
-Este repositorio contiene la arquitectura completa de una infraestructura escalable en **Google Cloud Platform**, desplegada mediante **IaC (Terraform)**, configurada con **Ansible** y gestionada a través de un pipeline de **CI/CD con GitHub Actions**.
+🛠️ Stack Tecnológico
+Nube: Google Cloud Platform (Instancia e2-micro).
 
-El proyecto demuestra habilidades avanzadas en automatización de infraestructura, seguridad (SSL/TLS), observabilidad y gestión de contenedores.
+SO: Ubuntu 24.04 LTS (Optimizado con 2GB SWAP).
 
-## 🚀 Arquitectura del Proyecto
+Automatización: Ansible & GitHub Actions.
 
-El ecosistema está diseñado bajo el principio de "Everything as Code" y se divide en las siguientes capas:
+Contenedorización: Docker & Docker Compose.
 
-* **Infraestructura (IaC):** Google Cloud Platform (VPC, Compute Engine, Firewall Rules) gestionado con **Terraform**.
-* **Configuración (CaC):** Automatización del sistema operativo y despliegue de servicios con **Ansible**.
-* **Orquestación:** Contenedores gestionados con **Docker & Docker Compose**.
-* **CI/CD:** Pipeline automatizado en **GitHub Actions** para despliegues continuos.
-* **Observabilidad:** Stack de monitoreo con **Prometheus, Grafana y Node Exporter**.
-* **Networking & Seguridad:** Reverse Proxy con **Nginx Proxy Manager** y certificados **SSL/TLS (Let's Encrypt)**.
+Proxy & Seguridad: Nginx Proxy Manager (NPM).
 
-## 🛠️ Stack Tecnológico
+Observabilidad: Prometheus & Grafana.
 
-| Herramienta | Función |
-| :--- | :--- |
-| **GCP** | Proveedor de nube pública. |
-| **Terraform** | Aprovisionamiento de infraestructura. |
-| **Ansible** | Gestión de configuración y despliegue de apps. |
-| **Docker** | Contenedorización de microservicios. |
-| **GitHub Actions** | Automatización de despliegue (Pipeline). |
-| **NPM** | Gestión de dominios y terminación SSL. |
-| **Stack TIG** | Monitoreo y métricas en tiempo real. |
+📈 Roadmap del Proyecto
+[x] Fase 1: Provisionamiento de instancia y red en GCP.
 
-## 📦 Estructura del Repositorio
+[x] Fase 2: Gestión de configuración base con Ansible.
 
-```bash
-├── .github/workflows/   # Definición del pipeline de CI/CD
-├── app/                 # Código y Docker Compose de la aplicación web
-├── monitoring/          # Configuración de Prometheus y Grafana
-├── proxy/               # Nginx Proxy Manager setup
-├── main.tf              # Definición de infraestructura en Terraform
-├── deploy_all.yml       # Playbook maestro de Ansible
-├── ansible.cfg          # Configuración de comportamiento de Ansible
-└── README.md            # Documentación del proyecto
+[x] Fase 3: Contenedorización de servicios (Docker Stack).
 
-## ⚙️ Configuración del Pipeline
-El pipeline está configurado para ejecutarse en cada `push` a la rama `main`, realizando las siguientes acciones:
+[x] Fase 4: Pipeline CI/CD con GitHub Actions (Deploy Key ED25519).
 
-1. **Checkout** del código.
-2. **Configuración de identidad SSH** (RSA con algoritmos de intercambio de llaves específicos).
-3. **Despliegue automático** mediante Ansible hacia la instancia de GCP.
+[x] Fase 5: Observabilidad (Dashboard de métricas en tiempo real).
 
-## 📊 Acceso al Entorno
-Actualmente, el proyecto es accesible de forma segura bajo el dominio:
-🔗 [https://devops.dommatt.com](https://devops.dommatt.com)
+[x] Fase 6: Proxy Inverso y gestión de dominios.
 
----
+[x] Fase 7: Continuidad de Negocio (Backups automatizados & DRP).
 
-## 📈 Roadmap del Proyecto
-* [x] **Fase 1:** Provisionamiento (Terraform)
-* [x] **Fase 2:** Gestión de Configuración (Ansible)
-* [x] **Fase 3:** Contenedorización (Docker & Docker Compose)
-* [x] **Fase 4:** Integración de Workstation y Pipeline CI/CD
-* [x] **Fase 5:** Observabilidad y Monitoreo (Métricas en tiempo real)
-* [x] **Fase 6:** Seguridad Avanzada (SSL/Dominio)
-* [ ] **Fase 7:** Continuidad de Negocio (Backups & Disaster Recovery) - **EN PROGRESO**
+🛡️ Continuidad de Negocio & Disaster Recovery (DRP)
+Estrategia de Backup
+Se implementó un script de respaldo automatizado (backup_npm.sh) que realiza copias diarias de la base de datos de Nginx Proxy Manager (SQLite) hacia un directorio de persistencia, manteniendo una retención de 7 días para optimizar el almacenamiento.
 
----
-**Autor:** Orlando Domínguez – Systems Technologist
+Procedimiento de Restauración
+En caso de pérdida total de la instancia:
+
+Redespliegue: Ejecutar el pipeline de GitHub Actions para levantar la infraestructura base.
+
+Inyección de Datos:
+
+Bash
+# Detener servicios
+docker compose down
+# Restaurar base de datos
+cp ~/backups/npm_db_fecha.sqlite ~/proxy/data/database.sqlite
+# Reiniciar servicios
+docker compose up -d
+⚙️ Optimización de Recursos
+Para operar en una instancia e2-micro (1GB RAM), se configuró:
+
+SWAP de 2GB: Mitigación de errores Out of Memory (OOM).
+
+Swappiness (10): Optimización del uso de RAM física antes de recurrir al disco.
+
+Sincronización Blindada: Ansible configurado para actualizar definiciones sin sobrescribir datos persistentes.
+
+👨‍💻 Autor
+Orlando Dominguez M.
