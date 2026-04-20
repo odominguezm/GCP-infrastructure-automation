@@ -3,12 +3,12 @@
   hosts: all
   become: yes
   vars:
-    # Definimos el usuario explícitamente para evitar errores de variable indefinida
     deploy_user: "ubuntu"
     deploy_path: "/home/ubuntu"
+    backup_path: "/home/ubuntu/backups"
 
   tasks:
-    # --- SECCIÓN DE OPTIMIZACIÓN DE RENDIMIENTO ---
+    # --- SECCIÓN 1: OPTIMIZACIÓN DE RENDIMIENTO ---
     - name: 1. Gestionar archivo SWAP de 2GB
       block:
         - name: Crear archivo swap si no existe
@@ -21,9 +21,9 @@
             chmod 600 /swapfile
             mkswap /swapfile
             swapon /swapfile
-          when: ansible_swaptotal_mb < 500  # Solo actúa si no hay swap activa
+          when: ansible_swaptotal_mb < 500
 
-    - name: 2. Hacer el SWAP permanente y ajustar swappiness
+    - name: 2. Ajustes de persistencia para SWAP
       block:
         - lineinfile:
             path: /etc/fstab
@@ -34,19 +34,20 @@
             value: '10'
             state: present
 
-    # --- SECCIÓN DE ESTRUCTURA Y ARCHIVOS ---
-    - name: 3. Asegurar directorios de proyectos
+    # --- SECCIÓN 2: ESTRUCTURA Y SEGURIDAD ---
+    - name: 3. Asegurar directorios de proyectos y backups
       file:
-        path: "{{ deploy_path }}/{{ item }}"
+        path: "{{ item }}"
         state: directory
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
         mode: '0755'
       loop:
-        - monitoring
-        - proxy
+        - "{{ deploy_path }}/monitoring"
+        - "{{ deploy_path }}/proxy"
+        - "{{ backup_path }}"
 
-    - name: 4. Corregir permisos para Prometheus
+    - name: 4. Permisos específicos para Prometheus
       file:
         path: "{{ deploy_path }}/monitoring/prometheus_data"
         state: directory
@@ -55,24 +56,37 @@
         mode: '0777'
         recurse: yes
 
-    - name: 5. Sincronizar archivos de configuración (MODO SEGURO)
+    # --- SECCIÓN 3: SINCRONIZACIÓN BLINDADA ---
+    - name: 5. Sincronizar solo definiciones (Sin sobrescribir datos)
       copy:
         src: "{{ item.src }}"
         dest: "{{ deploy_path }}/{{ item.dest }}"
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
+        mode: '0644'
       loop:
-        # Copiamos solo los archivos de definición, NO las carpetas de datos
         - { src: "./monitoring/docker-compose.yml", dest: "monitoring/docker-compose.yml" }
         - { src: "./proxy/docker-compose.yml", dest: "proxy/docker-compose.yml" }
+      # Esto garantiza que las carpetas /data (donde están tus configs de NPM) no se toquen
 
-    # --- SECCIÓN DE DESPLIEGUE ---
-    - name: 6. Levantar Stack de Monitoreo
+    # --- SECCIÓN 4: DESPLIEGUE DE CONTENEDORES ---
+    - name: 6. Levantar servicios con Docker Compose
       community.docker.docker_compose_v2:
-        project_src: "{{ deploy_path }}/monitoring/"
+        project_src: "{{ item }}"
         state: present
+        wait: yes
+      loop:
+        - "{{ deploy_path }}/monitoring/"
+        - "{{ deploy_path }}/proxy/"
 
-    - name: 7. Levantar Nginx Proxy Manager
-      community.docker.docker_compose_v2:
-        project_src: "{{ deploy_path }}/proxy/"
-        state: present
+    # --- SECCIÓN 5: TAREAS DE MANTENIMIENTO (NUEVO) ---
+    - name: 7. Crear script de backup diario (Base de datos NPM)
+      copy:
+        dest: "{{ deploy_path }}/backup_npm.sh"
+        content: |
+          #!/bin/bash
+          TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+          cp {{ deploy_path }}/proxy/data/database.sqlite {{ backup_path }}/npm_db_$TIMESTAMP.sqlite
+          find {{ backup_path }} -name "npm_db_*.sqlite" -mtime +7 -delete
+        mode: '0755'
+        owner: "{{ deploy_user }}"
