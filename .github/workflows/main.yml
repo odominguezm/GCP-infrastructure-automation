@@ -1,39 +1,144 @@
+---
 name: Deploy to GCP
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "Ansible tags to run (empty = all)"
+        required: false
+        default: ""
+
+# Two concurrent deployments against the same instance could leave two
+# `docker compose up` writes overlapping. The group serialises the jobs.
+concurrency:
+  group: deploy-gcp
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
+    # 20 minutes was not enough. On this e2-micro (1 GB of RAM, most of it
+    # shared with seven containers) Grafana needs 18-27 minutes to pass its own
+    # healthcheck, and `stacks.yml` waits up to 30 for the compose stacks to
+    # settle. The old limit killed deployments that were about to succeed.
+    timeout-minutes: 90
+
+    permissions:
+      contents: read
+      # Required by google-github-actions/auth: the federation flow exchanges
+      # this workflow's OIDC token for short-lived GCP credentials.
+      id-token: write
+
     steps:
-      - name: Checkout code
+      - name: Check out the code
         uses: actions/checkout@v4
 
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          # Escribimos la nueva llave ED25519 (que es más corta y no se corrompe)
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_github_actions
-          chmod 600 ~/.ssh/id_github_actions
-          
-          # Escaneamos la IP para evitar el error de "Host key verification failed"
-          ssh-keyscan -H ${{ secrets.GCP_IP }} >> ~/.ssh/known_hosts
-          
-          # Configuramos SSH para que siempre use esta nueva identidad
-          cat <<EOF > ~/.ssh/config
-          Host *
-              IdentityFile ~/.ssh/id_github_actions
-              StrictHostKeyChecking no
-          EOF
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - name: Run Ansible Playbook
+      - name: Install the gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Start the Identity-Aware Proxy tunnel
         run: |
-          # Un solo paso de Ansible usando la llave id_github_actions
-          # Usamos tus secretos: GCP_IP, GCP_USER y la ruta de la nueva llave
-          ansible-playbook -i "${{ secrets.GCP_IP }}," deploy_all.yml \
-            -u ${{ secrets.GCP_USER }} \
-            --private-key ~/.ssh/id_github_actions \
-            -e "ansible_python_interpreter=/usr/bin/python3"
+          set -euo pipefail
+          # The instance has no public SSH surface by design: the firewall only
+          # opens tcp:22 to Google's IAP range (35.235.240.0/20). A direct
+          # connection to the external IP therefore cannot work any more, and
+          # the deployment has to go through IAP like every other operator.
+          #
+          # Credentials come from the `auth` step, so there is no key file and
+          # nothing long-lived to leak.
+          nohup gcloud compute start-iap-tunnel \
+            "${{ vars.GCP_INSTANCE_NAME }}" \
+            22 \
+            --local-host-port=localhost:2222 \
+            --zone="${{ vars.GCP_ZONE }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            > /tmp/iap-tunnel.log 2>&1 &
+          echo "$!" > /tmp/iap-tunnel.pid
+
+          for i in $(seq 1 60); do
+            if nc -z 127.0.0.1 2222; then
+              echo "IAP tunnel ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::IAP tunnel did not come up within 60s"
+          cat /tmp/iap-tunnel.log
+          exit 1
+
+      - name: Stop the Identity-Aware Proxy tunnel
+        if: always()
+        run: |
+          if [ -f /tmp/iap-tunnel.pid ]; then
+            kill "$(cat /tmp/iap-tunnel.pid)" 2>/dev/null || true
+          fi
+
+      - name: Prepare the deployment SSH key
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          # The secret comes from the repository settings, never from the code.
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # ssh-keygen -y confirms the key is usable and detects a corrupted or
+          # truncated key before wasting time on Ansible.
+          ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null
+
+      - name: Record the host public key
+        run: |
+          set -euo pipefail
+          # ansible.cfg sets host_key_checking = True, so the key has to be in
+          # known_hosts. The scan has to run against the tunnel's local end:
+          # the external IP no longer answers on 22.
+          #
+          # This is safe here because the local end of the tunnel terminates on
+          # this runner and every byte afterwards travels inside IAP's own TLS
+          # channel to Google's gateway. The key collected is therefore the
+          # instance's key as reported through an authenticated path, not
+          # something an on-path attacker could have substituted.
+          ssh-keyscan -H -p 2222 127.0.0.1 >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Install Ansible and the required collections
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          # Pinned to a range rather than "latest": community.docker 5.x
+          # requires ansible-core >= 2.17, so a major version bump can break the
+          # deployment without anything changing in the repository.
+          pip install "ansible-core>=2.17,<2.20" yamllint
+          # Without this, `community.docker.docker_compose_v2` does not exist on
+          # the runner and the failure shows up as a missing module.
+          ansible-galaxy collection install -r requirements.yml
+
+      - name: Validate the playbook syntax
+        run: ansible-playbook site.yml --syntax-check
+
+      - name: Run the deployment
+        run: |
+          set -euo pipefail
+          # 127.0.0.1:2222 is the IAP tunnel's local end, not the public IP.
+          ansible-playbook site.yml \
+            -i "127.0.0.1:2222," \
+            -u "${{ vars.GCP_USER }}" \
+            --private-key ~/.ssh/deploy_key \
+            --diff \
+            ${{ inputs.tags && format('--tags {0}', inputs.tags) || '' }} \
+            --extra-vars "ansible_python_interpreter=/usr/bin/python3" \
+            --extra-vars "grafana_admin_password=${{ secrets.GF_SECURITY_ADMIN_PASSWORD }}" \
+            --extra-vars "backup_bucket=${{ vars.BACKUP_BUCKET }}"

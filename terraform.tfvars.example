@@ -1,0 +1,51 @@
+# ============================================================
+# Copy this file to terraform.tfvars and adjust the values.
+# terraform.tfvars is gitignored because it can hold real values.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+# ============================================================
+
+project_id = "devops-lab-orlando"
+region     = "us-central1"
+zone       = "us-central1-a"
+
+network_name = "vpc-devops-lab"
+subnet_name  = "subnet-devops"
+subnet_cidr  = "10.0.1.0/24"
+
+# Only HTTP/HTTPS are reachable from the internet.
+web_source_ranges = ["0.0.0.0/0"]
+
+# SSH is reachable only from Google's IAP range, so the instance has
+# no public SSH surface at all:
+#   gcloud compute ssh instancia-devops-gcp --tunnel-through-iap --zone us-central1-a
+ssh_source_ranges = ["35.235.240.0/20"]
+
+instance_name = "instancia-devops-gcp"
+machine_type  = "e2-micro"
+image         = "ubuntu-os-cloud/ubuntu-2404-lts"
+disk_size_gb  = 30
+
+# Turn on once the organisation policy has been verified to allow it.
+enable_shielded_vm = false
+
+# Keep enabled to avoid destroying the instance with a typo.
+deletion_protection = true
+
+# Bootstrap access for Ansible.
+ssh_user             = "ubuntu"
+ssh_public_key_path  = "~/.ssh/id_deploy_gcp.pub"
+# ---------- Disaster recovery ----------
+# Bucket for off-site database backups. Leave empty to disable off-site backup
+# (the local copy stays on the same disk, which is not disaster recovery).
+#
+# Bucket names are global and must be unique across all of Google Cloud, so
+# append something personal.
+backup_bucket_name = "devops-lab-orlando-backups-TUSUFIJO"
+backup_bucket_location = "us-central1"
+backup_bucket_retention_days = 7
+
+# Scheduled boot disk snapshots, which cover everything the database backup does
+# not: Docker volumes, /etc, the Ansible-managed configuration.
+snapshot_retention_days = 7
+enable_snapshots = true

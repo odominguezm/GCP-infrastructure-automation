@@ -1,0 +1,62 @@
+---
+# Single entrypoint for the deployment.
+#   ansible-playbook site.yml
+#
+# All logic lives in tasks/ and is pulled in with import_tasks, so this file
+# never grows and each block stays reusable and testable in isolation:
+#   ansible-playbook site.yml --tags swap
+
+- name: Configure the DevOps instance on GCP
+  hosts: gcp_servers
+  become: true
+  gather_facts: true
+
+  # Fail early if the instance does not have enough RAM for the rest of the run.
+  # Swap is deliberately NOT checked here: tasks/swap.yml verifies it at the end
+  # of its own block, and checking it here would deadlock `--tags swap` (the
+  # assertion would fail during the exact run that fixes it).
+  pre_tasks:
+    - name: Verify the instance meets the minimum capacity
+      ansible.builtin.assert:
+        that:
+          - ansible_memtotal_mb | int >= 900
+        fail_msg: >-
+          Expected at least 900 MB of RAM on {{ inventory_hostname }}
+          (detected: {{ ansible_memtotal_mb }} MB). This playbook is sized for
+          the GCP free tier (e2-micro, 1 GB).
+        success_msg: "Enough RAM ({{ ansible_memtotal_mb }} MB)."
+        quiet: true
+      tags: [always]
+
+  tasks:
+    # --- Order matters -------------------------------------------------------
+    # 1. Swap first: without it, the rest of the play can get OOM-killed on 1 GB.
+    - name: Tune memory with swap
+      ansible.builtin.import_tasks: tasks/swap.yml
+      tags: [swap]
+
+    - name: Install and configure Docker Engine
+      ansible.builtin.import_tasks: tasks/docker.yml
+      tags: [docker]
+
+    - name: Deploy the container stacks
+      ansible.builtin.import_tasks: tasks/stacks.yml
+      tags: [stacks]
+
+    - name: Schedule database backups
+      ansible.builtin.import_tasks: tasks/backups.yml
+      tags: [backups]
+
+    # 3. Hardening last, and with `reloaded` instead of `restarted`: reloading
+    #    sshd applies the new configuration without cutting the very connection
+    #    that is running this play.
+    - name: Harden the SSH configuration
+      ansible.builtin.import_tasks: tasks/ssh_hardening.yml
+      tags: [hardening]
+
+  post_tasks:
+    # A deployment is not finished until the containers are verified as healthy.
+    # Without this, a green pipeline can mean a stack that is actually down.
+    - name: Verify the health of the deployed stacks
+      ansible.builtin.import_tasks: tasks/verify.yml
+      tags: [verify, always]

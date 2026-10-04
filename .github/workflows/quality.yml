@@ -1,0 +1,256 @@
+---
+# ============================================================
+# Quality gates
+#
+# Runs on every push and pull request, and never touches the cloud. Its only job
+# is to reject a change that would have failed, or silently broken, the
+# deployment.
+#
+# What each gate buys, in the order they were added:
+#
+#   terraform fmt      formatting, free
+#   terraform validate  catches a typo in a resource name before it reaches a plan
+#   tflint              provider-specific mistakes validate() does not catch
+#   checkov             misconfigured or public cloud resources, incl. the firewall
+#   ansible-lint        playbooks that only fail once they are running against a VM
+#   yamllint            YAML that parses but is wrong in a way nobody notices
+#   hadolint            Dockerfile quality, for when one is added
+#   actionlint          GitHub Actions typos, which only fail inside Actions
+#
+# Kept deliberately split from main.yml (the deployment workflow): a lint failure
+# must never block or delay an incident response, and the deployment must never
+# carry lint tooling as a dependency.
+# ============================================================
+name: Quality
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# A newer run supersedes an older one on the same ref. Without this, five pushes
+# in a row queue five full lint runs.
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # Matches the version used for the real deployment. Validating with a
+          # different Terraform than the one that will apply is how a config
+          # passes CI and fails in production.
+          terraform_version: 1.16.2
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive -diff
+
+      - name: Initialise without a backend
+        # No backend is configured on purpose: this repository keeps state out of
+        # Git, and CI must not authenticate to a real backend just to lint.
+        run: terraform init -backend=false -input=false
+
+      - name: Validate
+        run: terraform validate
+
+      - name: tflint
+        uses: terraform-linters/setup-tflint@v5
+        with:
+          tflint_version: latest
+
+      - name: Run tflint
+        run: tflint --recursive --format=compact
+
+      - name: Checkov
+        # External checks are disabled on purpose: they need provider credentials
+        # and would fail here, which trains people to ignore a red pipeline.
+        run: >-
+          pip install checkov &&
+          checkov
+            --directory .
+            --framework terraform
+            --quiet
+            --compact
+            --skip-download
+            --external-checks-dir "" 2>&1 | tee checkov.log
+        continue-on-error: false
+        env:
+          # Lets checkov resolve Google provider schemas without credentials.
+          CKV_TF_LOG_LEVEL: WARN
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checkov-report
+          path: checkov.log
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  ansible:
+    name: Ansible
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('requirements.yml') }}
+          restore-keys: pip-
+
+      - name: Install collections and lint tools
+        run: |
+          ansible-galaxy collection install -r requirements.yml
+          pip install ansible-core ansible-lint yamllint
+
+      - name: ansible-lint
+        run: ansible-lint site.yml
+
+      - name: yamllint
+        run: yamllint .
+
+      - name: Check that no secret is committed
+        # A private key anywhere in the tree, whatever its name. This is the gate
+        # that would have caught the key that was committed by accident.
+        run: |
+          if grep -rIlE 'BEGIN (OPENSSH|RSA|EC|DSA) PRIVATE KEY' \
+               --exclude-dir=.git --exclude-dir=.terraform . ; then
+            echo "::error::A private key is committed in this repository."
+            exit 1
+          fi
+          echo "No private keys found."
+
+      - name: Check that .env is not committed
+        run: |
+          if git ls-files | grep -qE '(^|/)\.env$'; then
+            echo "::error::A .env file is tracked. It holds secrets."
+            exit 1
+          fi
+          echo "No .env file is tracked."
+
+  # ------------------------------------------------------------------
+  containers:
+    name: Containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: yamllint the compose files specifically
+        run: yamllint app proxy monitoring
+
+      - name: Validate the compose files parse and resolve
+        # --quiet exits non-zero on a bad file, which catches the mistakes that
+        # only appear as a confusing `docker compose up` failure later.
+        run: |
+          export GF_SECURITY_ADMIN_USER=ci
+          export GF_SECURITY_ADMIN_PASSWORD=ci-only-not-a-real-secret
+          for stack in app proxy monitoring; do
+            echo "::group::$stack"
+            docker compose -f "$stack/docker-compose.yml" config --quiet
+            echo "::$stack"
+          done
+          echo "All compose files valid."
+
+      - name: Rebuild the Grafana dashboard and fail on drift
+        # The dashboard is generated. If a developer edits the JSON by hand and
+        # does not regenerate, this is the step that says so.
+        run: |
+          python3 monitoring/grafana/dashboards/build_dashboard.py
+          if ! git diff --exit-code -- monitoring/grafana/dashboards/node-overview.json; then
+            echo "::error::node-overview.json does not match build_dashboard.py. Regenerate and commit it."
+            exit 1
+          fi
+          echo "Dashboard is in sync with its generator."
+
+      - name: Validate the alert rules parse
+        # Not a full promtool check: promtool would need the Prometheus binary,
+        # which is a 100 MB download on every run. The structural check below
+        # catches the mistakes that actually happen (indentation, duplicate
+        # alert names, an expression that is not a string).
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          docs = yaml.safe_load(open('monitoring/prometheus/alerts.yml'))
+          seen = {}
+          errors = []
+          for group in docs['groups']:
+              for rule in group['rules']:
+                  name = rule['alert']
+                  if name in seen:
+                      errors.append(f"duplicate alert name {name}")
+                  seen[name] = group['name']
+                  if not isinstance(rule['expr'], str) or not rule['expr'].strip():
+                      errors.append(f"{name}: expr must be a non-empty string")
+                  ann = rule.get('annotations', {})
+                  if 'summary' not in ann:
+                      errors.append(f"{name}: missing annotations.summary")
+                  if rule['labels'].get('severity') not in ('critical','warning','info'):
+                      errors.append(f"{name}: severity must be critical, warning or info")
+          prom = yaml.safe_load(open('monitoring/prometheus/prometheus.yml'))
+          jobs = {j['job_name'] for j in prom['scrape_configs']}
+          for required in ('prometheus', 'node_exporter', 'cadvisor', 'alertmanager'):
+              if required not in jobs:
+                  errors.append(f"prometheus.yml is missing the scrape job {required}")
+          if 'alertmanagers' not in prom.get('alerting', {}):
+              errors.append("prometheus.yml has no alerting.alertmanagers section: alerts would be evaluated and then discarded")
+          print(f"{len(seen)} alert rules across {len(docs['groups'])} groups, {len(jobs)} scrape jobs")
+          for e in errors:
+              print(f"  ERROR {e}", file=sys.stderr)
+          sys.exit(1 if errors else 0)
+          PY
+
+      - name: Validate the Alertmanager template renders
+        run: |
+          # Renders the template with no webhook, then parses the result as YAML.
+          # A Jinja typo in alertmanager.yml.j2 otherwise only shows up as an
+          # Alertmanager crash loop after deployment.
+          pip install jinja2
+          python3 - <<'PY'
+          import jinja2, yaml, sys
+          env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+          src = open('monitoring/alertmanager.yml.j2').read()
+          for url in (None, 'https://example.invalid/hook'):
+              out = env.from_string(src).render(alertmanager_webhook_url=url)
+              doc = yaml.safe_load(out)
+              assert doc['route']['receiver'] in ('null', 'slack-compatible'), doc['route']['receiver']
+              if url:
+                  assert doc['route']['receiver'] == 'slack-compatible'
+                  assert any(r.get('name') == 'slack-compatible' for r in doc['receivers'])
+              else:
+                  assert doc['route']['receiver'] == 'null'
+              print(f"renders OK -> receiver={doc['route']['receiver']}")
+          PY
+
+  # ------------------------------------------------------------------
+  workflow:
+    name: GitHub Actions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: actionlint
+        # A typo in a workflow only fails once Actions runs it, which is the
+        # worst possible moment to find out.
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color

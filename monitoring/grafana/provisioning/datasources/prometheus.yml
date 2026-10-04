@@ -1,0 +1,53 @@
+---
+# ============================================================
+# Grafana data sources, provisioned
+#
+# Provisioning means the data source is defined in version control instead of
+# being clicked into the UI and living only in Grafana's SQLite database. Two
+# consequences that matter:
+#
+#   1. A fresh Grafana volume comes up already connected. There is no manual
+#      step where someone forgets to add Prometheus and ends up with an empty
+#      dashboard and no error.
+#   2. The data source UID is fixed, so the dashboard JSON can reference it
+#      without caring what ID a previous manual creation happened to get.
+#
+# Applied at startup and every 30s. Alertmanager is registered as a second data
+# source for the same reason: the alerting runbook needs to show the current
+# silencing state, and doing that by hand is error-prone during an incident.
+# ============================================================
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Matches the 15s global scrape_interval in prometheus.yml. Letting
+      # Grafana use its own default of 1m while the data arrives every 15s
+      # produces panels that look "stepped" for no visible reason.
+      timeInterval: 15s
+      httpMethod: POST
+      # The instance is single-writer. Disabling this stops Grafana from offering
+      # to edit rules on the Prometheus data source page and silently failing,
+      # because rules live in the repository and are reloaded from there.
+      manageAlerts: false
+      prometheusType: Prometheus
+      prometheusVersion: 3.15.0
+      incrementalQuerying: true
+      cacheLevel: Low
+
+  - name: Alertmanager
+    type: alertmanager
+    uid: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    editable: false
+    jsonData:
+      # Same version pinning, so the alerting API stays compatible.
+      alertmanagerVersion: v0.34.1
+      implementation: prometheus

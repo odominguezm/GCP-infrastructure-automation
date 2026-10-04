@@ -1,12 +1,61 @@
+---
+# ============================================================
+# Nginx Proxy Manager: reverse proxy + automatic TLS certificates
+#
+# Exposure:
+#   80  and 443  the only project ports reachable from the internet
+#                (`allow_web` firewall rule in Terraform). The admin panel
+#                (81) is bound to 127.0.0.1 and is not published.
+# ============================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   app:
-    image: 'jc21/nginx-proxy-manager:latest'
+    image: jc21/nginx-proxy-manager:${NPM_VERSION:-2.16.0}
     container_name: nginx-proxy-manager
     restart: unless-stopped
     ports:
-      - '80:80'
-      - '81:81' # Panel de administración
-      - '443:443'
+      - "80:80"
+      - "443:443"
+      # The admin panel is bound to the host loopback interface. It is not
+      # exposed to the internet or to the GCP network, and remains reachable
+      # through an SSH tunnel:
+      #   ssh -L 8081:localhost:81 <instance>
+      - "127.0.0.1:81:81"
     volumes:
+      # Data: never synced from git (see tasks/stacks.yml). This holds the
+      # SQLite database with the hosts and certificates, plus the Let's Encrypt
+      # certificates.
       - ./data:/data
       - ./letsencrypt:/etc/letsencrypt
+    # Lets NPM resolve the host and reach the demo app, which runs in a
+    # separate Compose project and is bound to 127.0.0.1:21680 on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # The admin panel login page: the only path that returns 200 without
+      # authentication.
+      test: ["CMD-SHELL", "curl -fs http://localhost:81/manage/login >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # NPM issues Let's Encrypt certificates on boot: the first start takes a
+      # while, and restarting it over a failed healthcheck would be
+      # counterproductive.
+      start_period: 60s
+    # Memory ceiling, calibrated so the sum of all containers fits in the
+    # physical RAM of the e2-micro.
+    # Lowered from 288m to make room for Alertmanager and cAdvisor inside the
+    # 1 GB budget. Nginx spends almost all of its time idle and its real working
+    # set here sits far below the ceiling; the limit is a backstop, not a
+    # reservation. If this service starts hitting the ceiling in practice, the
+    # correct fix is a bigger instance, not a bigger number.
+    # 128 MiB: measured working set is 11 MiB. The 96 MiB freed here funds
+    # cAdvisor's ceiling, which was being OOM-killed at 64 MiB.
+    mem_limit: 128m
+    logging: *default-logging

@@ -1,8 +1,40 @@
+---
+# ============================================================
+# Demo app: nginx serving static content.
+#
+# This is the sample workload that Nginx Proxy Manager publishes over TLS.
+# ============================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   web:
-    image: nginx:latest
+    image: nginx:${NGINX_VERSION:-1.31-alpine}
+    container_name: demo-app
+    restart: unless-stopped
     ports:
-      - "21680:80"
+      # Bound to 127.0.0.1 on purpose. It used to be published on 21680 to the
+      # whole internet, which made the demo reachable without TLS or a proxy.
+      # Now the only ingress path is HTTPS through Nginx Proxy Manager, which is
+      # how an application is actually deployed.
+      - "127.0.0.1:21680:80"
     volumes:
-      - ./html:/usr/share/nginx/html
-    restart: always
+      # Static content. If this volume were read-write, a compromised container
+      # could modify what it serves; the image already runs unprivileged.
+      - ./html:/usr/share/nginx/html:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # A single static page served by nginx. 24 MiB is generous for this workload.
+    mem_limit: 24m
+    logging: *default-logging
+    security_opt:
+      # Stops a process in the container from gaining extra privileges.
+      - no-new-privileges:true

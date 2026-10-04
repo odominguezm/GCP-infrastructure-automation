@@ -1,0 +1,59 @@
+---
+# Backups of the Nginx Proxy Manager database (SQLite).
+#
+# The README claimed there was a daily backup scheduled at 03:00, but the play
+# created the script and never created the cron entry. This play creates BOTH,
+# so the README claim is true.
+
+- name: Create the backup directory
+  ansible.builtin.file:
+    path: "{{ backup_path }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    # Copies of the database can contain sensitive data.
+    mode: "0700"
+
+- name: Deploy the backup script
+  ansible.builtin.template:
+    src: backup_npm.sh.j2
+    dest: "{{ deploy_path }}/backup_npm.sh"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0755"
+
+- name: Run a test backup (validates the script during the deployment)
+  ansible.builtin.command: "{{ deploy_path }}/backup_npm.sh"
+  become_user: "{{ deploy_user }}"
+  register: backup_test
+  changed_when: true
+  # The first deployment must fail if the backup does not work. A backup that
+  # was never tested is not a backup, it is an assumption.
+  failed_when: backup_test.rc != 0
+
+- name: Schedule the daily backup
+  ansible.builtin.cron:
+    name: "Nginx Proxy Manager database backup"
+    minute: "{{ backup_minute }}"
+    hour: "{{ backup_hour }}"
+    user: "{{ backup_user }}"
+    job: "{{ deploy_path }}/backup_npm.sh"
+    state: present
+
+- name: Read the deployment user's crontab
+  ansible.builtin.command: crontab -l -u {{ backup_user }}
+  register: crontab_content
+  changed_when: false
+  failed_when: false
+  become_user: "{{ backup_user }}"
+  check_mode: false
+
+- name: Confirm the daily backup is scheduled
+  ansible.builtin.assert:
+    that:
+      - "'backup_npm.sh' in (crontab_content.stdout | default(''))"
+    fail_msg: >-
+      The cron entry for the backup was not registered. Check
+      `crontab -l -u {{ backup_user }}` on {{ inventory_hostname }}.
+    success_msg: "Daily backup scheduled and verified in the crontab."
+    quiet: true

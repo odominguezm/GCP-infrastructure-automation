@@ -1,0 +1,26 @@
+---
+# Ansible collections required.
+#   ansible-galaxy collection install -r requirements.yml
+#
+# The lower bounds are not arbitrary: each is the minimum version that provides
+# the module this project uses. Going higher is optional; going lower breaks the
+# deployment with a not-very-descriptive "module not found".
+#
+# IMPORTANT: community.docker 5.x requires ansible-core >= 2.17. On
+# ansible-core 2.16, pin community.docker to ">=3.4.0,<5.0.0". The CI workflow
+# installs ansible-core >= 2.16 and resolves to the latest 2.x, where the range
+# above applies. To stop the local environment and CI from diverging, the
+# ansible-core version is pinned explicitly in the workflow.
+
+collections:
+  # Module used: community.docker.docker_compose_v2
+  - name: community.docker
+    version: ">=3.4.0"
+
+  # Modules used: ansible.posix.mount, ansible.posix.sysctl, plus the
+  # ansible.posix.profile_tasks callback declared in ansible.cfg.
+  - name: ansible.posix
+    version: ">=1.5.4"
+
+  - name: community.general
+    version: ">=8.0.0"

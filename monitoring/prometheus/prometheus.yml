@@ -1,11 +1,61 @@
+---
+# ============================================================
+# Prometheus configuration
+# ============================================================
+
 global:
   scrape_interval: 15s
+  # How often alert rules are evaluated. Shorter than the scrape interval so an
+  # alert can fire as soon as there is enough data.
+  evaluation_interval: 15s
+  external_labels:
+    # Static labels added to every series. They distinguish this instance from
+    # any other added to a Prometheus later, and allow filtering by environment
+    # in queries.
+    environment: dev
+    cluster: gcp-devops-lab
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# Without this, Prometheus evaluates every rule and then keeps the result to
+# itself. Alertmanager is the component that decides who hears about it.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
 
 scrape_configs:
-  - job_name: 'node_exporter'
+  # The instance itself: build info, cardinality and TSDB metrics. Without it
+  # you cannot detect a failing scrape or a rule generating an uncontrolled
+  # number of series.
+  - job_name: prometheus
     static_configs:
-      - targets: ['node-exporter:9100']
+      - targets: ["localhost:9090"]
+        labels:
+          component: monitoring
 
-  - job_name: 'prometheus'
+  # Host metrics: CPU, RAM, swap, disk, load. The basis of the main dashboard and
+  # of most alerts.
+  - job_name: node_exporter
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ["node-exporter:9100"]
+        labels:
+          component: host
+
+  # Containers via cAdvisor. This is the job that answers "which container is
+  # responsible", which is the question that matters when seven containers share
+  # 1 GB of RAM.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels:
+          component: runtime
+
+  # Alertmanager itself. Scraped so the dead man's switch (the Watchdog alert)
+  # can be verified end to end rather than assumed to work.
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+        labels:
+          component: monitoring

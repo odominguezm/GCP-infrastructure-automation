@@ -1,0 +1,41 @@
+# ============================================================
+# yamllint configuration
+#
+# Runs in CI (quality.yml). A linter that produces noise gets disabled by its own
+# team within a week, so every rule relaxed below says why.
+# ============================================================
+---
+extends: default
+
+rules:
+  # 120 columns. The default is 80, which is shorter than what a Prometheus
+  # expression or a KexAlgorithms list can be written in without hurting
+  # readability. Checkov's KexAlgorithms recommendation alone is over 200
+  # characters on one logical line.
+  line-length:
+    max: 120
+    level: warning
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+
+  # Not enforced. Deciding whether a `yes` belongs in a compose file or in a
+  # variable is a judgement call, and a linter cannot make it.
+  truthy:
+    level: warning
+
+  # Comments above a key are the convention used throughout this repository to
+  # explain why a value is what it is; indentation of those blocks should not be
+  # a review topic.
+  comments:
+    min-spaces-from-content: 1
+
+  # Duplicated keys are a real bug class in YAML and cost nothing to forbid.
+  key-duplicates: enable
+
+  document-start:
+    present: true
+
+ignore: |
+  .terraform/
+  node_modules/
+  *.tfvars

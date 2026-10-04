@@ -1,0 +1,139 @@
+---
+# SSH hardening.
+#
+# A drop-in file in sshd_config.d is used instead of editing the main
+# sshd_config: Ubuntu includes it with `Include /etc/ssh/sshd_config.d/*.conf`,
+# so the packaged file is left untouched and the customisations are versioned
+# separately.
+
+- name: Check whether a hardening drop-in already exists
+  ansible.builtin.stat:
+    path: "{{ ssh_config_path }}"
+  register: ssh_dropin_state
+  when: ssh_hardening_enabled | bool
+
+- name: Record whether a previous drop-in exists (for rollback)
+  ansible.builtin.set_fact:
+    ssh_had_previous_dropin: "{{ ssh_dropin_state.stat.exists | default(false) }}"
+
+- name: Back up the current drop-in
+  ansible.builtin.copy:
+    src: "{{ ssh_config_path }}"
+    dest: "{{ ssh_config_path }}.bak"
+    remote_src: true
+    mode: "0600"
+  when:
+    - ssh_hardening_enabled | bool
+    - ssh_had_previous_dropin | bool
+
+# Write and validate as one unit. If `sshd -t` fails, the rescue reverts the
+# file: writing a broken sshd_config would make the instance unreachable, and
+# that failure would only surface on the next connection attempt, not now.
+- name: Write and validate the SSH hardening configuration
+  when: ssh_hardening_enabled | bool
+  block:
+    - name: Create the SSH drop-in directory
+      ansible.builtin.file:
+        path: "{{ ssh_config_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write the hardening drop-in
+      ansible.builtin.copy:
+        dest: "{{ ssh_config_path }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          # Managed by Ansible (tasks/ssh_hardening.yml). Do not edit by hand.
+
+          # --- Authentication ---
+          # The only valid access method to this instance is the SSH key.
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitEmptyPasswords no
+
+          # --- Root ---
+          # Direct root login adds nothing given `sudo` and only widens the
+          # attack surface.
+          PermitRootLogin no
+
+          # --- Algorithm selection ---
+          KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
+          Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+          MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+
+          # --- Session ---
+          # Bounds brute force and idle hung connections.
+          MaxAuthTries 3
+          MaxSessions 5
+          LoginGraceTime 30
+
+          # --- Auditing ---
+          LogLevel VERBOSE
+
+    - name: Validate the full SSH configuration
+      ansible.builtin.command: "{{ ssh_reload_command }} -t -f /etc/ssh/sshd_config"
+      changed_when: false
+      check_mode: false
+
+  rescue:
+    - name: Restore the previous drop-in
+      ansible.builtin.copy:
+        src: "{{ ssh_config_path }}.bak"
+        dest: "{{ ssh_config_path }}"
+        remote_src: true
+        mode: "0600"
+      when: ssh_had_previous_dropin | bool
+
+    - name: Remove the drop-in if there was no previous one
+      ansible.builtin.file:
+        path: "{{ ssh_config_path }}"
+        state: absent
+      when: not (ssh_had_previous_dropin | bool)
+
+    - name: Abort the deployment because the SSH configuration is invalid
+      ansible.builtin.fail:
+        msg: >-
+          The SSH configuration written does not pass `sshd -t`. The change was
+          rolled back automatically. Fix tasks/ssh_hardening.yml and run again.
+
+# `reloaded`, not `restarted`: sshd reads its configuration on every new
+# connection, so reloading applies the hardening without cutting the SSH
+# connection that is running this very play.
+- name: Reload the SSH service with the new configuration
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: reloaded
+    daemon_reload: true
+  when:
+    - ssh_hardening_enabled | bool
+    - ssh_reload_command is defined
+
+# It is not enough for the play to finish green: read the EFFECTIVE config sshd
+# derives (`sshd -T`) and assert on it. This catches the classic failure of a
+# misnamed drop-in or a missing `Include`, where the file is written correctly
+# but never applied.
+- name: Read the effective SSH configuration
+  ansible.builtin.command: "{{ ssh_reload_command }} -T -f /etc/ssh/sshd_config"
+  register: sshd_effective
+  changed_when: false
+  check_mode: false
+  when: ssh_hardening_enabled | bool
+
+- name: Confirm the hardening is actually in effect
+  ansible.builtin.assert:
+    that:
+      - "'passwordauthentication no' in sshd_effective.stdout | lower"
+      - "'permitrootlogin no' in sshd_effective.stdout | lower"
+      - "'maxauthtries 3' in sshd_effective.stdout | lower"
+    fail_msg: >-
+      The drop-in was written but sshd is not applying it. Check that
+      /etc/ssh/sshd_config contains `Include /etc/ssh/sshd_config.d/*.conf` and
+      that the file is named exactly {{ ssh_config_path }} (sshd ignores
+      subdirectories).
+    success_msg: "SSH hardening verified against the effective configuration."
+    quiet: true
+  when: ssh_hardening_enabled | bool

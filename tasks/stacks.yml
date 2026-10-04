@@ -1,0 +1,191 @@
+---
+# Deployment of the Docker Compose stacks.
+#
+# Golden rule of this play: never sync a whole directory with
+# `synchronize` + `delete: yes`. If someone deletes a file from the repo and the
+# play runs, that deletion propagates to the server and takes with it data that
+# is not in git: the Nginx Proxy Manager SQLite database, the Let's Encrypt
+# certificates, the Prometheus TSDB. Only the files declared explicitly in
+# group_vars/all.yml -> compose_stacks are synced.
+
+- name: Create the stack and backup directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0755"
+  loop:
+    - { path: "{{ deploy_path }}/app", comment: "Demo app" }
+    - { path: "{{ deploy_path }}/proxy", comment: "Nginx Proxy Manager" }
+    - { path: "{{ deploy_path }}/monitoring", comment: "Observability" }
+    - { path: "{{ backup_path }}", comment: "Backups" }
+  loop_control:
+    label: "{{ item.comment }} -> {{ item.path }}"
+
+- name: Require the secrets before generating anything
+  ansible.builtin.assert:
+    that:
+      - grafana_admin_password is not none
+      - grafana_admin_password | string | length > 12
+    fail_msg: >-
+      `grafana_admin_password` is missing (minimum 13 characters). Pass it with
+      --extra-vars, from a GitHub Actions secret, or in
+      group_vars/all/local.yml (gitignored). There is deliberately no default.
+    quiet: true
+  no_log: true
+
+- name: Render the .env file for each stack with the secrets
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ deploy_path }}/{{ item }}/.env"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    # 0600: it holds the Grafana password in cleartext.
+    mode: "0600"
+  loop: "{{ compose_stacks | map(attribute='name') | list }}"
+  loop_control:
+    label: "{{ deploy_path }}/{{ item }}/.env"
+  # Keeps the credential out of the play output and out of CI logs.
+  no_log: true
+
+# `subelements` flattens the list of lists (stack -> files) into a single list
+# of pairs, avoiding a nested loop.
+#
+# Files marked `template: true` are rendered with Jinja first. Alertmanager needs
+# this: it has no `--config.expand-env-vars` flag and does not substitute
+# environment variables in its config file, so the only way to inject the
+# webhook URL is to render the file before the container starts.
+
+# `copy` creates a destination that ends in `/` (a directory source), but it does
+# NOT create the parent directory of a destination that is a plain file. Without
+# this task a file added to compose_stacks under a new subdirectory fails with
+# "Destination directory ... does not exist" -- the directory is only ever a
+# destination of another file, never a source, so nothing else creates it.
+# Deriving the parents from the same `compose_stacks` list means adding a file
+# never requires remembering to also add a directory task.
+- name: Create the destination directories declared in compose_stacks
+  ansible.builtin.file:
+    path: "{{ deploy_path }}/{{ item.0.name }}/{{ item.1.dest | dirname }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0755"
+  loop: "{{ compose_stacks | subelements('sync') }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1.dest | dirname }}"
+
+# `owner`/`group` are overridable per file because "who renders the file" and
+# "who reads the file" are not always the same user. Alertmanager is the case
+# that matters: its container runs as 65534:65534 (`user:` in the compose file),
+# but a file rendered as 0600 owned by the deploy user is unreadable for it and
+# the container dies on start with "permission denied" on its own config.
+- name: Sync definitions only (never data), rendering templates where declared
+  ansible.builtin.template:
+    src: "{{ item.1.src }}"
+    dest: "{{ deploy_path }}/{{ item.0.name }}/{{ item.1.dest }}"
+    owner: "{{ item.1.owner | default(deploy_user) }}"
+    group: "{{ item.1.group | default(deploy_user) }}"
+    mode: "0600"
+  loop: "{{ compose_stacks | subelements('sync') }}"
+  loop_control:
+    label: "{{ item.0.name }}: {{ item.1.src }} -> {{ item.0.name }}/{{ item.1.dest }}"
+  when: item.1.template | default(false) | bool
+
+- name: Sync definitions only (never data), copying static files
+  ansible.builtin.copy:
+    src: "{{ item.1.src }}"
+    dest: "{{ deploy_path }}/{{ item.0.name }}/{{ item.1.dest }}"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0644"
+  loop: "{{ compose_stacks | subelements('sync') }}"
+  loop_control:
+    label: "{{ item.0.name }}: {{ item.1.src }} -> {{ item.0.name }}/{{ item.1.dest }}"
+  when: not (item.1.template | default(false) | bool)
+
+# A rendered file that contains a credential must never be world-readable. The
+# copy task above sets 0600 for templates, but this assertion turns a silent
+# permission mistake into a hard failure, rather than leaving it to surface as a
+# security audit finding months later.
+- name: Assert no rendered definition is readable by other users
+  ansible.builtin.stat:
+    path: "{{ deploy_path }}/{{ item.0.name }}/{{ item.1.dest }}"
+  loop: "{{ compose_stacks | subelements('sync') }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1.dest }}"
+  when: item.1.template | default(false) | bool
+  register: rendered_configs
+  changed_when: false
+
+- name: Fail if a rendered config containing a secret is not 0600
+  ansible.builtin.assert:
+    that:
+      - item.stat.mode == '0600'
+    fail_msg: >-
+      {{ item.stat.path }} has mode {{ item.stat.mode }}, expected 0600.
+      It is rendered from a template and may contain a credential.
+    quiet: true
+  loop: "{{ rendered_configs.results }}"
+  loop_control:
+    label: "{{ item.stat.path | default('?') }}"
+  when: item.skipped | default(false) | bool == false
+
+- name: Bring up the container stacks
+  community.docker.docker_compose_v2:
+    project_src: "{{ deploy_path }}/{{ item.name }}/"
+    state: present
+    # `wait: true` makes the play fail if a container does not start, instead of
+    # carrying on and reporting success with a stack that is down.
+    wait: true
+    # 1800s, not the Docker default of 60s: on the e2-micro's burstable shared
+    # vCPU, Grafana needs ~20 minutes to register its plugins, run its migrations
+    # and bind :3000, and `docker compose up --wait` treats anything slower than
+    # this as a failed start. A timeout shorter than the real boot time turns a
+    # slow boot into a red pipeline -- which is what happened at 180s.
+    # This is the single slowest step of the deployment; the play is not hung.
+    wait_timeout: 1800
+    # `always`, not `true`: from community.docker 3.x the module validates this
+    # against the Compose file schema, which accepts only
+    # always|missing|never|policy, and a boolean aborts the play with
+    # "value of pull must be one of ...". `always` is the equivalent of
+    # `docker compose pull` before `up`, which is what the deployments want:
+    # the tags are pinned in .env, so re-fetching them keeps the running stack
+    # matching what version control declares even if the local cache drifted.
+    pull: always
+    remove_orphans: true
+  loop: "{{ compose_stacks }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.description }})"
+  register: compose_deploy
+
+- name: Show the deployment summary
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}:
+      {{ item.stdout_lines | default(['(no compose output']) | join(' | ') }}
+  loop: "{{ compose_deploy.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.changed | default(false)
+
+# Belt and braces for the loop above: `docker_compose_v2` already fails its own
+# task when `wait: true` times out, so reaching this point normally means every
+# stack came up. The check catches the cases where that stops being true, e.g. if
+# `failed_when` is relaxed or `ignore_errors` is added later.
+#
+# The condition is `not item.failed`, NOT `item.failed is not defined`. Ansible
+# registers `failed: false` on a successful loop iteration, so the key is always
+# present and `is not defined` is always False -- which made this assert fail on
+# every single successful deployment.
+- name: Confirm every stack came up
+  ansible.builtin.assert:
+    that:
+      - not (item.failed | default(false))
+    fail_msg: >-
+      The stack {{ item.item.name }} failed to deploy. Check
+      `docker compose logs` in {{ deploy_path }}/{{ item.item.name }}.
+    quiet: true
+  loop: "{{ compose_deploy.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"

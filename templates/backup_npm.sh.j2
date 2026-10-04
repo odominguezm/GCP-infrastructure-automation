@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# ============================================================
+# Backup of the Nginx Proxy Manager database (SQLite).
+#
+# Managed by Ansible (tasks/backups.yml). Do not edit by hand: any change is
+# overwritten on the next deployment.
+#
+# Why `cp` is not enough:
+# SQLite writes across several files (database.sqlite, -wal, -shm). Copying just
+# the .sqlite file while the service is writing produces a copy that sometimes
+# does not open. This uses the SQLite backup API through python3 (bundled with
+# Ubuntu), which takes a consistent copy while hot, without stopping the
+# service.
+#
+# The copy is verified with `PRAGMA integrity_check` before being accepted: an
+# unverified backup is not a backup.
+#
+# If `backup_bucket` is set, the verified copy is also uploaded to Cloud Storage.
+# Without it the backup is a file on the same disk as the database it protects,
+# which does not survive losing the disk: that is the failure the off-site copy
+# exists for.
+# ============================================================
+set -euo pipefail
+
+readonly SOURCE_DB="{{ deploy_path }}/proxy/data/database.sqlite"
+readonly BACKUP_DIR="{{ backup_path }}"
+readonly RETENTION_DAYS="{{ backup_retention_days }}"
+readonly LOCK_FILE="/tmp/backup_npm.lock"
+readonly TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+readonly DESTINATION="${BACKUP_DIR}/npm_db_${TIMESTAMP}.sqlite"
+readonly LOG_PREFIX="[backup_npm]"
+
+{% if backup_bucket %}
+readonly BUCKET="{{ backup_bucket }}"
+# Retention in the bucket is enforced by a GCS lifecycle rule, not from here: the
+# service account only holds roles/storage.objectCreator, so it cannot delete
+# objects even if this script were modified. Expiry has to be a bucket-side rule.
+{% else %}
+readonly BUCKET=""
+{% endif %}
+
+log() {
+  printf '%s %s %s\n' "${LOG_PREFIX}" "$(date --iso-8601=seconds)" "$*"
+}
+
+fail() {
+  log "ERROR: $*"
+  exit 1
+}
+
+# `flock` prevents two overlapping backups if cron runs late: overwriting a copy
+# while it is being written would leave it corrupted.
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  log "Another backup is still running. Exiting."
+  exit 0
+fi
+
+[[ -f "${SOURCE_DB}" ]] || fail "Source database does not exist: ${SOURCE_DB}"
+
+log "Starting backup: ${SOURCE_DB} -> ${DESTINATION}"
+
+{% if backup_consistent | bool -%}
+# python3 reads the script from stdin ("-") and receives the arguments in sys.argv.
+python3 - "${SOURCE_DB}" "${DESTINATION}" <<'PYEOF'
+import sqlite3
+import sys
+
+source, destination = sys.argv[1], sys.argv[2]
+
+# Mode `ro`: if the database is missing or corrupt, this fails instead of
+# silently creating an empty one.
+src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+dst = sqlite3.connect(destination)
+
+with dst:
+    src.backup(dst)
+
+# Integrity check before accepting the copy as good.
+result = dst.execute("PRAGMA integrity_check").fetchone()[0]
+dst.close()
+src.close()
+
+if result != "ok":
+    print(f"integrity_check failed: {result}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+{% else -%}
+# Simple mode: only safe while Nginx Proxy Manager is stopped, because `cp` of an
+# open database can produce an inconsistent copy.
+log "WARNING: non-consistent backup (backup_consistent=false)."
+cp "${SOURCE_DB}" "${DESTINATION}"
+{% endif -%}
+
+[[ -s "${DESTINATION}" ]] || fail "The resulting copy is empty or missing."
+
+# `readonly` and the assignment have to be one statement. `readonly SIZE_BYTES`
+# on its own marks the name read-only with no value, and the next assignment
+# then aborts the whole script with "SIZE_BYTES: readonly variable" - which
+# turned every backup into a failed job even though the copy was fine.
+readonly SIZE_BYTES="$(stat -c%s "${DESTINATION}")"
+log "Backup OK: ${DESTINATION} (${SIZE_BYTES} bytes)"
+
+# Retention: 7 days by default. Only files matching this script's own pattern
+# are deleted, so unrelated files are never touched.
+log "Applying retention of ${RETENTION_DAYS} days."
+find "${BACKUP_DIR}" \
+  -type f \
+  -name 'npm_db_*.sqlite' \
+  -mtime "+${RETENTION_DAYS}" \
+  -print -delete
+
+{% if backup_bucket %}
+# ------------------------------------------------------------------
+# Off-site copy.
+#
+# `gsutil` comes from google-cloud-sdk, which Ansible installs separately. When it
+# is missing the local backup is still valid, so this is a warning and not a
+# failure: a temporary tooling problem must not turn into a failed cron job that
+# looks like the database is broken.
+#
+# Authentication is implicit, via the instance's service account, which holds
+# roles/storage.objectCreator on the bucket. No key file, nothing to rotate.
+# ------------------------------------------------------------------
+if command -v gsutil >/dev/null 2>&1; then
+  log "Uploading to gs://${BUCKET}/npm/..."
+
+  # Prefixed with the timestamp and flattened into one folder: the destination
+  # path is derived from the source filename, so re-running never overwrites.
+  # Without -m, a large upload would be split into a separate request per object
+  # and multipart is noticeably faster.
+  if gsutil -m cp "${DESTINATION}" "gs://${BUCKET}/npm/" 2>>/dev/null; then
+    log "Upload OK: gs://${BUCKET}/npm/$(basename "${DESTINATION}")"
+  else
+    log "WARNING: upload failed. The local copy at ${DESTINATION} is still valid."
+  fi
+else
+  log "WARNING: gsutil not installed, skipping the off-site copy."
+fi
+{% endif %}
+
+log "Done."

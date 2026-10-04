@@ -1,0 +1,42 @@
+---
+# ============================================================
+# Grafana dashboard provider
+#
+# Tells Grafana to load every dashboard JSON found under /etc/grafana/dashboards
+# and keep them in sync. The alternative, clicking dashboards into the UI, means
+# the dashboard a reviewer clones from GitHub is not the dashboard that runs:
+# the real one lives in an unsynced SQLite database. Provisioning closes that
+# gap, and it is the single highest-value thing in this observability stack.
+#
+# Note the layout: the provider config lives in provisioning/dashboards/ and the
+# dashboard JSONs live in a sibling directory mounted at /etc/grafana/dashboards.
+# They cannot share a directory, because Grafana would try to parse this very
+# file as a dashboard.
+#
+# `allowUiUpdates: false` is deliberate. Edits made in the UI are overwritten on
+# the next reload, which looks like a Grafana bug to anyone who tries it. Being
+# explicit turns "my change disappeared" into "edit the JSON", which is the
+# behaviour a repository-backed dashboard wants.
+#
+# `disableDeletion: false` is the opposite choice on purpose: if a dashboard is
+# removed from the repository it is also removed from Grafana. The repository is
+# the single source of truth, so keeping an orphan in the UI would contradict it.
+# ============================================================
+apiVersion: 1
+
+providers:
+  - name: devops-lab
+    orgId: 1
+    folder: DevOps lab
+    folderUid: devops-lab
+    type: file
+    # Evaluated every 30s, so a dashboard fix appears without restarting
+    # Grafana and without losing in-memory query state.
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    disableDeletion: false
+    options:
+      path: /etc/grafana/dashboards
+      # The JSONs already carry an explicit folderUid, so Grafana does not need
+      # to derive folders from the file layout.
+      foldersFromFilesStructure: false

@@ -1,0 +1,110 @@
+# ============================================================
+# Alertmanager configuration  (Jinja template, rendered by Ansible)
+#
+# Prometheus evaluates rules and sends the result here. Without this component
+# the rules in alerts.yml fire into a void: an alerting system that notifies
+# nobody is worse than none, because it creates a false sense of coverage.
+#
+# WHY THIS IS A TEMPLATE AND NOT A PLAIN FILE
+# Alertmanager has no `--config.expand-env-vars` flag: it does NOT substitute
+# environment variables inside its config file. A committed `${ALERT_WEBHOOK_URL}`
+# would be sent to the receiver as that literal string and the webhook would fail
+# on every notification. The only correct ways to inject a value are to render the
+# file before the container starts (what this template does) or to keep it out of
+# the config entirely. So Ansible renders this to
+# /home/ubuntu/monitoring/alertmanager.yml.
+#
+# Rendered result can be checked with:
+#   docker compose exec alertmanager amtool check-config /etc/alertmanager/alertmanager.yml
+# ============================================================
+
+global:
+  # How long Alertmanager waits before notifying again about the same alert.
+  # Without it, a container that stays down produces a notification every few
+  # seconds.
+  resolve_timeout: 5m
+
+  # Slack- and Discord-compatible endpoints rate-limit aggressively. Alertmanager
+  # retries with backoff and honours 429, so a burst of alerts queues instead of
+  # getting the whole channel blocked.
+  http_config:
+    follow_redirects: true
+
+route:
+  # Defaults to the no-op receiver when no webhook is configured, so a fresh
+  # clone starts with a healthy alerting stack. An alerting stack that refuses to
+  # start is worse than one that starts quietly.
+  # QUOTED on purpose: in YAML a bare `null` is the null value, not the string
+  # "null". Unquoted, Alertmanager reads the receiver as unset and refuses to
+  # start. The same applies to the receiver name below.
+  receiver: {% if alertmanager_webhook_url %}"slack-compatible"{% else %}"null"{% endif %}
+
+  # How long Alertmanager waits after the first alert of a group before sending
+  # the initial notification: it lets a flapping target settle instead of
+  # paging on every oscillation.
+  group_wait: 30s
+  # Minimum time between notifications for the same group.
+  group_interval: 5m
+  # How often to repeat an unresolved notification. Twelve hours is the usual
+  # balance between "do not forget" and "do not spam".
+  repeat_interval: 12h
+
+  routes:
+    # Info alerts need no human action, so they never reach a channel. Watchdog
+    # in particular is always firing by design (it is the dead man's switch);
+    # delivering it would only train people to ignore the channel.
+    - matchers:
+        - severity = "info"
+      receiver: "null"
+      continue: false
+
+receivers:
+  # A receiver with no integration attached. Alertmanager accepts it and drops
+  # the notifications, which keeps the routing graph valid and the process
+  # healthy while there is no endpoint to notify.
+  - name: "null"
+{% if alertmanager_webhook_url %}
+  # Real delivery. The URL is a credential, so it arrives from the environment
+  # (Ansible variable -> GitHub secret or group_vars/all/local.yml) and is never
+  # committed.
+  - name: slack-compatible
+    webhook_configs:
+      - url: "{{ alertmanager_webhook_url }}"
+        # An operator who opens the incident needs to see that it closed without
+        # having to check the dashboard themselves.
+        send_resolved: true
+        # Bounds the size of a notification when a whole instance goes down and
+        # every target with it fires at once.
+        max_alerts: 20
+{% endif %}
+
+# ------------------------------------------------------------------
+# Inhibition: suppressing alerts that are consequences of another one.
+#
+# Without this, a single instance going down produces fifteen simultaneous
+# notifications and nobody can tell which is the root cause. Inhibition keeps the
+# cause and hides the noise.
+# ------------------------------------------------------------------
+inhibit_rules:
+  # Every metric derived from a downed instance goes missing with it, which fires
+  # a burst of resource alerts that all share one cause.
+  - source_matchers:
+      - alertname = "TargetDown"
+    target_matchers:
+      - severity =~ "warning|critical"
+    equal: ["instance"]
+
+  # Memory exhaustion drags the swap and load alerts along with it.
+  - source_matchers:
+      - alertname = "HostCriticalMemoryUsage"
+    target_matchers:
+      - alertname =~ "HostHighMemoryUsage|HostHighSwapUsage"
+    equal: ["instance"]
+
+  # A container being OOM-killed makes its own memory alert fire at the same
+  # moment Prometheus stops scraping it. The restart is the real problem.
+  - source_matchers:
+      - alertname = "TargetDown"
+    target_matchers:
+      - alertname =~ "ContainerMemoryLimitExceeded|ContainerHighMemoryUsage"
+    equal: ["instance"]

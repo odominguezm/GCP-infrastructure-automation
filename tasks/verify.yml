@@ -1,0 +1,95 @@
+---
+# Post-deployment verification.
+#
+# A green pipeline has to mean "the services are operational", not just "the
+# docker compose command exited 0". These tasks read the real container state
+# and fail the deployment if anything is not healthy.
+
+- name: List the state of the deployed containers
+  ansible.builtin.command: >-
+    docker ps --filter status=running
+    --format '{{ "{{.Names}}" }} {{ "{{.Status}}" }}'
+  register: running_containers
+  changed_when: false
+  check_mode: false
+  become_user: "{{ deploy_user }}"
+
+- name: Show the container state
+  ansible.builtin.debug:
+    msg: "{{ running_containers.stdout_lines }}"
+
+# The containers this project guarantees. If one is not running, the deployment
+# is considered failed even though `docker compose up` returned 0.
+#
+# A second `docker ps` returning names only, one per line. Matching against
+# `stdout_lines` (a core Ansible variable) avoids both a substring test on the
+# whole blob - where "grafana" would also match some other container's name - and
+# any dependency on a non-core Jinja filter.
+- name: Collect the names of the running containers
+  ansible.builtin.command: >-
+    docker ps --filter status=running --format '{{ "{{.Names}}" }}'
+  register: running_container_names
+  changed_when: false
+  check_mode: false
+  become_user: "{{ deploy_user }}"
+
+- name: Check that the expected containers are up
+  ansible.builtin.assert:
+    that:
+      - expected_container in running_container_names.stdout_lines
+    fail_msg: >-
+      Container '{{ expected_container }}' is not running on
+      {{ inventory_hostname }}. Current state:
+      {{ running_containers.stdout_lines }}
+    quiet: true
+  loop:
+    - nginx-proxy-manager
+    - prometheus
+    - grafana
+    - node-exporter
+    - alertmanager
+    - cadvisor
+    - demo-app
+  loop_control:
+    loop_var: expected_container
+
+# Running is not the same as working. A container whose process is alive but
+# crash-looping on a config error stays in `docker ps` and reports "Up" while
+# serving nothing. This is not hypothetical: Alertmanager spent a whole afternoon
+# restart-looping on an unrendered Jinja template, and
+# `docker ps --filter status=running` listed it the whole time.
+#
+# `docker ps --format {{.Status}}` already appends the health verdict, e.g.
+# "Up 12 minutes (healthy)" / "Up 4 minutes (unhealthy)". The check is on that
+# word, not on a separate `docker inspect`, so it cannot drift from the status
+# printed above and needs no shell.
+#
+# "health: starting" is deliberately NOT a failure: Grafana needs ~20 minutes to
+# become ready on this instance and failing the deployment while its own
+# start_period is still counting would be wrong.
+- name: Check that no container reports an unhealthy state
+  ansible.builtin.assert:
+    that:
+      - "'(unhealthy)' not in item"
+    fail_msg: >-
+      {{ item.split()[0] }} is unhealthy on {{ inventory_hostname }}. Inspect it
+      with `docker inspect --format '{{ '{{' }}.State.Health.Log{{ '}}' }}' <container>`
+      and `docker logs <container>`. Current state:
+      {{ running_containers.stdout_lines }}
+    quiet: true
+  loop: "{{ running_containers.stdout_lines }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Check swap usage (signal of memory pressure)
+  ansible.builtin.command: swapon --show=NAME,USED,PRIO --noheadings
+  register: swap_usage
+  changed_when: false
+  check_mode: false
+  failed_when: false
+
+- name: Report swap usage after the deployment
+  ansible.builtin.debug:
+    msg: >-
+      Swap in use: {{ (swap_usage.stdout | default('n/a')) }}
+      (memtotal: {{ ansible_memtotal_mb }} MB)

@@ -1,0 +1,303 @@
+---
+# ============================================================
+# Prometheus alerting rules
+#
+# Criterion for picking a rule: every alert exists because somebody has to do
+# something concrete when it fires. An alert with no associated action is noise,
+# and noise trains people to ignore alerts, which is the worst possible outcome.
+#
+# Conventions:
+#   severity: critical | warning | info
+#   "info" is reserved for things that need no immediate action.
+# ============================================================
+groups:
+  # ------------------------------------------------------------
+  # Availability: is the service responding?
+  # ------------------------------------------------------------
+  - name: availability
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: monitoring
+        annotations:
+          summary: "Target {{ $labels.job }} down on {{ $labels.instance }}"
+          description: >-
+            Prometheus has not been able to scrape {{ $labels.job }} for more
+            than 2 minutes. The service may be stopped or the scrape may be
+            misconfigured.
+          impact: "Visibility of {{ $labels.job }} is lost; its own alerts stop evaluating too."
+
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: monitoring
+        annotations:
+          summary: "Prometheus config fails to reload"
+          description: >-
+            The last `POST /-/reload` of the Prometheus configuration failed.
+            Prometheus keeps running with the previous configuration, but any
+            change to rules.yml is not being applied.
+          impact: "New or changed rules do not exist for Prometheus."
+          runbook: docs/runbooks/alerting.md#configuracion
+
+      # Dead man's switch. This alert always fires, even when everything is
+      # perfect. Its purpose is the opposite of the others: if it stops reaching
+      # the external receiver, the alerting system itself is the problem.
+      # Without it, a dead Alertmanager can go unnoticed for weeks.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: info
+          component: monitoring
+        annotations:
+          summary: "Alerting system heartbeat"
+          description: "This alert should always fire. If it stops arriving, check Alertmanager."
+
+  # ------------------------------------------------------------
+  # Resources: can it keep up?
+  # ------------------------------------------------------------
+  - name: resources
+    rules:
+      - alert: HostHighMemoryUsage
+        expr: >-
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          component: host
+        annotations:
+          summary: "Memory usage above 85% on {{ $labels.instance }}"
+          description: >-
+            The instance has been using more than 85% of its physical RAM for
+            over 10 minutes. On an e2-micro (1 GB) that leaves little headroom
+            before swap kicks in.
+          impact: "High latency and risk of the OOM killer."
+          runbook: docs/runbooks/alerting.md#memory
+
+      - alert: HostCriticalMemoryUsage
+        expr: >-
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+          component: host
+        annotations:
+          summary: "Memory nearly exhausted on {{ $labels.instance }}"
+          description: >-
+            Memory usage above 95% sustained for 5 minutes. The kernel OOM
+            killer will start terminating processes.
+          impact: "Unrequested service outages."
+          runbook: docs/runbooks/alerting.md#memory
+
+      - alert: HostHighSwapUsage
+        # Swap itself is not a fault on such a small instance: it exists precisely
+        # to absorb spikes. What is a fault is swap being permanently busy,
+        # which means the RAM does not cover the normal workload.
+        expr: >-
+          (1 - (node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes)) > 0.50
+        for: 30m
+        labels:
+          severity: warning
+          component: host
+        annotations:
+          summary: "More than 50% of swap in use on {{ $labels.instance }}"
+          description: >-
+            Swap has been above 50% for more than 30 minutes. The normal workload
+            no longer fits in 1 GB of RAM and the system is paging to disk on a
+            sustained basis.
+          impact: "Constantly elevated latency."
+          runbook: docs/runbooks/alerting.md#swap
+
+      - alert: HostDiskSpaceLow
+        expr: >-
+          node_filesystem_avail_bytes{mountpoint="/"}
+            / node_filesystem_size_bytes{mountpoint="/"} < 0.15
+        for: 10m
+        labels:
+          severity: warning
+          component: host
+        annotations:
+          summary: "Root disk below 15% free on {{ $labels.instance }}"
+          description: >-
+            Less than 4.5 GB free on a 30 GB disk. The disk cannot be enlarged on
+            the free tier, so space has to be reclaimed.
+          impact: "Prometheus and Docker stop writing; the system can become unusable."
+          runbook: docs/runbooks/alerting.md#disk
+
+      - alert: HostDiskSpaceCritical
+        expr: >-
+          node_filesystem_avail_bytes{mountpoint="/"}
+            / node_filesystem_size_bytes{mountpoint="/"} < 0.05
+        for: 5m
+        labels:
+          severity: critical
+          component: host
+        annotations:
+          summary: "Root disk critically full on {{ $labels.instance }}"
+          description: "Less than 5% of the root disk is free. Escalate to an incident."
+          impact: "Data loss as soon as it fills up."
+          runbook: docs/runbooks/alerting.md#disk
+
+      - alert: HostHighCpuLoad
+        # Load is compared against the number of cores: a load of 4 is a problem
+        # on a 2-core machine and not on a 16-core one.
+        expr: >-
+          node_load15 / count(node_cpu_seconds_total{mode="idle"}) > 1.5
+        for: 15m
+        labels:
+          severity: warning
+          component: host
+        annotations:
+          summary: "High CPU load on {{ $labels.instance }}"
+          description: >-
+            The 15-minute load average is above 1.5 per core. Possible runaway
+            container or a TSDB compaction process.
+          impact: "High latency across every service on the host."
+
+  # ------------------------------------------------------------
+  # Capacity: something that will fill up even though nothing is broken yet?
+  # ------------------------------------------------------------
+  - name: capacity
+    rules:
+      - alert: PrometheusHighCardinality
+        # If the series count grows out of control the TSDB will stop fitting on
+        # disk. Warn early enough to reduce it.
+        expr: prometheus_tsdb_head_series > 5000
+        for: 30m
+        labels:
+          severity: warning
+          component: monitoring
+        annotations:
+          summary: "High Prometheus cardinality ({{ $value }} series)"
+          description: >-
+            The number of in-memory series is above 5000. With 1 GB of RAM for
+            Prometheus, high cardinality consumes memory and shortens the
+            effective TSDB retention.
+          impact: "Higher RAM usage and a TSDB truncated sooner than expected."
+
+  # ------------------------------------------------------------
+  # Containers: which one is responsible for the host pressure?
+  #
+  # These need cAdvisor. The rule above catches a host in trouble without
+  # saying why; these say which container to go and look at. That is the whole
+  # reason for running cAdvisor at all on a 1 GB instance.
+  # ------------------------------------------------------------
+  - name: containers
+    rules:
+      - alert: ContainerMemoryLimitExceeded
+        # Comparing against the container's own limit, not against host RAM:
+        # a container sitting at its ceiling is the problem even when the host
+        # still has hundreds of free megabytes.
+        expr: >-
+          (
+            container_memory_working_set_bytes{container!=""}
+              / on(instance, name) container_spec_memory_limit_bytes{container!=""}
+          ) > 0.90
+          and on(instance, name)
+          container_spec_memory_limit_bytes{container!=""} > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: runtime
+        annotations:
+          summary: "{{ $labels.name }} is using over 90% of its memory limit"
+          description: >-
+            Container {{ $labels.name }} has been above 90% of its memory limit
+            for 5 minutes. Once it reaches 100% the kernel OOM-kills it, and
+            Docker restarts it with an empty filesystem of in-memory state.
+          impact: "Restart loop and lost in-memory state."
+          runbook: docs/runbooks/alerting.md#contenedores
+
+      - alert: ContainerMemoryLimitCritical
+        expr: >-
+          (
+            container_memory_working_set_bytes{container!=""}
+              / on(instance, name) container_spec_memory_limit_bytes{container!=""}
+          ) > 0.97
+        for: 2m
+        labels:
+          severity: critical
+          component: runtime
+        annotations:
+          summary: "{{ $labels.name }} about to be OOM-killed"
+          description: >-
+            Container {{ $labels.name }} is within 3% of its memory limit and has
+            been for 2 minutes. The next allocation burst kills it.
+          impact: "The container will be terminated and restarted by Docker."
+          runbook: docs/runbooks/alerting.md#contenedores
+
+      - alert: ContainerKilledByOOM
+        # cAdvisor exposes OOM kills through the container's exit code (137 =
+        # 128 + SIGKILL). A rising count means the kernel, not the application,
+        # ended the process.
+        expr: >-
+          increase(container_oom_events_total{container!=""}[15m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: runtime
+        annotations:
+          summary: "Kernel OOM-killed {{ $labels.name }}"
+          description: >-
+            The kernel out-of-memory killer terminated container
+            {{ $labels.name }} in the last 15 minutes. Docker has restarted it,
+            but whatever it was doing at the time did not complete.
+          impact: "Dropped requests and possible data loss inside the container."
+          runbook: docs/runbooks/alerting.md#contenedores
+
+      - alert: ContainerRestarted
+        # restart_count only resets when the container is recreated, so this
+        # catches crash loops that stay up long enough to look healthy.
+        expr: >-
+          increase(container_last_seen{container=""}[5m]) == 0
+        for: 0m
+        labels:
+          severity: info
+          component: runtime
+        annotations:
+          summary: "Container {{ $labels.name }} restarted"
+          description: >-
+            {{ $labels.name }} disappeared from cAdvisor within a 5-minute
+            window, which means it was restarted or recreated.
+          impact: "Usually benign; investigate if it repeats frequently."
+
+      - alert: ContainerFilesystemSpaceLow
+        expr: >-
+          (
+            container_fs_filesystem_avail_bytes{container!=""}
+              / on(instance, name) container_fs_filesystem_capacity_bytes{container!=""}
+          ) < 0.10
+        for: 10m
+        labels:
+          severity: warning
+          component: runtime
+        annotations:
+          summary: "Less than 10% disk left visible to {{ $labels.name }}"
+          description: >-
+            Container {{ $labels.name }} can see less than 10% free space. On this
+            instance every container shares one 30 GB disk, so a single runaway
+            log can starve all of them.
+          impact: "Write failures across every container on the host."
+          runbook: docs/runbooks/alerting.md#disco
+
+      - alert: ContainerAbsentFromScrape
+        # A container that cAdvisor stopped reporting about is more actionable
+        # than "target down": it names the specific service that vanished.
+        expr: >-
+          absent(container_last_seen{container=~"grafana|prometheus|alertmanager|cadvisor"})
+        for: 5m
+        labels:
+          severity: critical
+          component: runtime
+        annotations:
+          summary: "Observability container missing ({{ $labels.job }})"
+          description: >-
+            cAdvisor stopped reporting at least one of the observability
+            containers. Either it was removed or the whole exporter died.
+          impact: "Blind spots in the monitoring stack itself."
+          runbook: docs/runbooks/alerting.md#contenedores

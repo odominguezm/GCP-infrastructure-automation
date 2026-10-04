@@ -1,62 +1,83 @@
-Aquí tienes el archivo .gitignore optimizado, sin duplicados y con comentarios profesionales estructurados por capas (Infraestructura, Configuración, Secretos y Sistema).
-
-Este orden es ideal para un repositorio de Portafolio, ya que demuestra que tienes un control claro sobre cada herramienta del stack.
-
-Ini, TOML
 # ==========================================
-# 1. INFRAESTRUCTURA (Terraform)
+# 1. TERRAFORM
 # ==========================================
-# Directorio local de trabajo (Contiene binarios de providers y módulos)
+# Working directory: holds the provider binaries (~86 MB).
 .terraform/
 
-# Archivos de estado (CRÍTICO: Contienen credenciales e IPs en texto plano)
+# State holds IPs and infrastructure metadata in cleartext. The real state lives
+# in a GCS bucket with versioning and locking.
 *.tfstate
-*.tfstate.backup
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
 
-# Archivos de variables personalizadas (Suelen contener secretos)
+# Variables holding real values.
+# terraform.tfvars.example IS versioned: it is the documented template.
 *.tfvars
 *.tfvars.json
+!terraform.tfvars.example
 
-# Archivos de bloqueo de dependencias
-.terraform.lock.hcl
+# .terraform.lock.hcl is deliberately NOT ignored: it pins exact provider
+# versions and is what makes the deployment reproducible.
 
 # ==========================================
-# 2. CONFIGURACIÓN Y AUTOMATIZACIÓN (Ansible)
+# 2. ANSIBLE
 # ==========================================
-# Inventarios locales (Contienen IPs de servidores de laboratorio)
+# Local inventories: they contain real lab server IPs.
 hosts.ini
 inventory.ini
 inventory_github.ini
+group_vars/all/local.yml
 
-# Archivos de reintento de Ansible
 *.retry
+.ansible_facts_cache
 
 # ==========================================
-# 3. SEGURIDAD Y SECRETOS (Keys & Auth)
+# 3. SECRETS
 # ==========================================
-# Directorio de llaves de servicio y certificados
+# GCP credentials. Fetch with: gcloud auth application-default login
+gcp-auth.json
+credentials.json
+service-account*.json
 keys/
-
-# Archivos de llaves privadas y públicas
-id_rsa*
-*.key
 *.pem
+*.key
+*.p12
+
+# All SSH key material, public keys included: this repository versions none of
+# it. Keys live in ~/.ssh and reach the pipeline through the SSH_PRIVATE_KEY
+# secret.
+id_rsa*
+id_ecdsa*
+id_ed25519*
+id_deploy*
 *.pub
+# Same reasoning for the generated SSH key pair Terraform installs on the
+# instance. id_deploy* above does not cover this name.
+id_ansible_github*
 
-# Archivos de credenciales de GCP y otros servicios
-*.json
+# Docker stack environment variables.
+.env
+!.env.example
+
+# Generated dashboard JSON is NOT ignored on purpose: it is deployed as-is and
+# CI fails if it drifts from monitoring/grafana/dashboards/build_dashboard.py.
+# Ignoring it would break the deployment, which is why the generator is
+# committed alongside it instead.
 
 # ==========================================
-# 4. ENTORNO DE DESARROLLO Y SISTEMA
+# 4. SYSTEM AND EDITORS
 # ==========================================
-# Archivos temporales de Editores (VS Code, IntelliJ, Vim)
 .vscode/
 .idea/
 *.swp
+*.swo
 
-# Archivos de sistema operativo (Pop!_OS / macOS)
 .DS_Store
 Thumbs.db
 
-# Logs de depuración y ejecución
 *.log
+
+# AI session notes: personal working notes, not documentation.
+.ai-context.md

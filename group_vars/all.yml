@@ -1,0 +1,126 @@
+---
+# ============================================================
+# Global variables for the DevOps lab
+# Everything that used to be hardcoded across the playbooks lives here.
+# ============================================================
+
+# ---------- Identity ----------
+deploy_user: ubuntu
+deploy_path: "/home/{{ deploy_user }}"
+
+# ---------- Memory tuning (e2-micro = 1 GB RAM) ----------
+swap_enabled: true
+swap_file_path: /swapfile
+# 2 GB: 3x the physical RAM, the margin Google Cloud's own documentation
+# recommends for small-memory instances.
+swap_size_gb: 2
+# 10 = use physical RAM first and fall back to disk only under pressure.
+vm_swappiness: 10
+
+# ---------- Container stacks ----------
+# Each entry declares a Docker Compose stack and, explicitly, which files are
+# "definitions" (synced from version control) and which are "data" (never
+# touched: databases, certificates, TSDB).
+#
+# This is the whole point of using `copy` instead of `synchronize`: `synchronize`
+# with `delete: yes` propagates a deletion from the repo and would take the
+# Nginx Proxy Manager SQLite database with it.
+compose_stacks:
+  - name: app
+    description: Demo app (nginx) published through Nginx Proxy Manager
+    sync:
+      - { src: app/docker-compose.yml, dest: docker-compose.yml }
+      - { src: app/html/, dest: html/ }
+
+  - name: proxy
+    description: Nginx Proxy Manager - reverse proxy and TLS certificates
+    sync:
+      - { src: proxy/docker-compose.yml, dest: docker-compose.yml }
+
+  - name: monitoring
+    description: Prometheus, node-exporter, cAdvisor, Alertmanager and Grafana
+    sync:
+      - { src: monitoring/docker-compose.yml, dest: docker-compose.yml }
+      - { src: monitoring/prometheus/prometheus.yml, dest: prometheus/prometheus.yml }
+      - { src: monitoring/prometheus/alerts.yml, dest: prometheus/alerts.yml }
+      # Rendered from the template, not copied: see tasks/stacks.yml. The
+      # destination has no .j2 because that is the file Alertmanager reads.
+      #
+      # owner/group are 65534:65534 because the container runs as that uid
+      # (`user: "65534:65534"` in the compose file). Left at the default
+      # (deploy_user, mode 0600) the container cannot read its own config and
+      # crash-loops with "permission denied" while Alertmanager stays healthy in
+      # every other respect. Mode stays 0600 either way: only the container, not
+      # the world and not the deploy user, can read it.
+      - src: monitoring/alertmanager.yml.j2
+        dest: alertmanager.yml
+        template: true
+        owner: "65534"
+        group: "65534"
+      - { src: monitoring/grafana/provisioning/, dest: grafana/provisioning/ }
+      - { src: monitoring/grafana/dashboards/node-overview.json, dest: grafana/dashboards/node-overview.json }
+      # The generator is copied too, so the dashboard can be rebuilt on the
+      # server if the dashboard JSON ever needs to be regenerated.
+      - { src: monitoring/grafana/dashboards/build_dashboard.py, dest: grafana/dashboards/build_dashboard.py }
+
+# ---------- Image versions ----------
+# Defined here rather than inline in the compose files so they can be bumped
+# from a single place. The compose files read them from the `.env` that
+# Ansible renders.
+#
+# Every tag below was checked against the upstream release feed rather than
+# guessed. Note that Grafana does not publish a floating "13.2" tag: the Docker
+# tag carries the full version, so release v13.2.3 is image 13.2.3.
+prometheus_version: "v3.15.0"
+alertmanager_version: "v0.34.1"
+node_exporter_version: "v1.12.1"
+cadvisor_version: "v0.60.6"
+grafana_version: "13.2.3"
+nginx_version: "1.31-alpine"
+npm_version: "2.16.0"
+prometheus_retention_time: "15d"
+prometheus_retention_size: "2GB"
+
+# ---------- Secrets ----------
+# No secrets in this file and none in the repository. The value arrives from
+# outside, in this order of precedence:
+#   1. GitHub Actions: --extra-vars from the GF_SECURITY_ADMIN_PASSWORD secret
+#   2. Local:         group_vars/all/local.yml (covered by .gitignore)
+#   3. Interactive:   ansible-playbook site.yml -e grafana_admin_password=...
+#
+# If it is left undefined, the deployment fails before touching anything. That
+# is preferable to bringing Grafana up with a well-known default password.
+grafana_admin_user: admin
+grafana_admin_password: null
+
+# ---------- Alerting ----------
+# null = alerts are evaluated and routed, but delivered to a receiver that drops
+# them. This is the default because a webhook URL is a credential: committing one
+# to a public repository leaks it and gets the repository rate-limited. Setting
+# this variable switches Alertmanager to a real Slack-compatible receiver with no
+# other change. See docs/runbooks/alerting.md.
+alertmanager_webhook_url: null
+
+# ---------- Backups ----------
+backup_path: "{{ deploy_path }}/backups"
+# true = consistent SQLite copy using the backup API (does not corrupt the
+# database mid-write). false = plain `cp`, only safe while the service is
+# stopped.
+backup_consistent: true
+backup_retention_days: 7
+# Cloud Storage bucket that receives a copy of every backup. Must match the
+# bucket created by Terraform (backup_bucket_name). Leave empty to keep backups
+# local only, which is not disaster recovery: the copy lives on the same disk as
+# the database.
+backup_bucket: ""
+
+# 03:00, outside the GCP maintenance window and before the server takes on
+# daytime load.
+backup_minute: 0
+backup_hour: 3
+backup_user: "{{ deploy_user }}"
+
+# ---------- SSH hardening ----------
+ssh_hardening_enabled: true
+ssh_config_path: /etc/ssh/sshd_config.d/99-hardening.conf
+ssh_reload_command: /usr/sbin/sshd

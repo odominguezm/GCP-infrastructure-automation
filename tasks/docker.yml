@@ -1,0 +1,163 @@
+---
+# Docker Engine + Docker Compose v2 on Ubuntu.
+#
+# Security note: membership of the `docker` group is equivalent to root without
+# a password (a container can mount / from the host). That is acceptable in a
+# single-user lab. In production, prefer rootless Docker or a dedicated service
+# user as the only member of the group.
+
+#
+# Order matters, and it is not obvious: the legacy one-line sources are removed
+# BEFORE the first `apt` task, not just before the deb822 file is written. APT
+# refuses to read its sources at all when two definitions of the same repository
+# disagree about Signed-By, so a host provisioned by an older version of this
+# repository (which used the `docker_repository` module and left a
+# download_docker_com_linux_ubuntu.list behind) makes *every* apt task fail with
+# "Conflicting values set for option Signed-By". Cleaning up later would be too
+# late: `update_cache: true` below is already broken by then.
+- name: Find legacy one-line APT sources for the Docker repository
+  ansible.builtin.shell:
+    # shell, not find: the selection is by CONTENT, not by filename, and no
+    # lookup plugin can read a file on the remote host. `|| true` because grep
+    # exits 1 when there is no match, which is the normal case on a fresh host.
+    cmd: grep -l 'download\.docker\.com' /etc/apt/sources.list.d/*.list 2>/dev/null || true
+  register: legacy_docker_sources
+  changed_when: false
+
+- name: Remove the conflicting legacy Docker APT sources
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ legacy_docker_sources.stdout_lines }}"
+  when: item | length > 0
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - git
+      - gnupg
+      - unzip
+      - python3-docker
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the APT keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Replaces the obsolete `apt_key` module, which was removed from Ansible.
+# The key is downloaded as an armored file rather than into the apt-key
+# database, so it survives an `apt-key clear`.
+#
+# This task is also what fails fast if the key URL is unreachable. `get_url`
+# returns non-zero instead of writing a partial or empty key, so the play stops
+# here rather than leaving an unverified repository behind and only failing
+# later at `apt update`.
+- name: Download the official Docker GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+    owner: root
+    group: root
+
+# deb822 is the repository format supported natively by APT and by
+# `deb822_repository` in Ansible 2.16+.
+#
+# Only parameters the module actually declares are used. `description` is
+# deliberately absent: it is not a supported parameter of `deb822_repository`
+# and passing it aborts the play with "Unsupported parameters". `check_mode` is
+# not a parameter of this module either, and it was never the right tool for the
+# intent it was given to: check mode here would only skip writing the file, it
+# would not verify that the repository key is reachable.
+- name: Configure the official Docker repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris:
+      - https://download.docker.com/linux/ubuntu
+    suites:
+      - "{{ ansible_distribution_release }}"
+    components: [stable]
+    signed_by: /etc/apt/keyrings/docker.asc
+    state: present
+
+- name: Install Docker Engine and the Compose v2 plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Ensure Docker starts on boot and is running
+  ansible.builtin.systemd_service:
+    name: docker
+    state: started
+    enabled: true
+
+# The `user` module has no `create` parameter, so the original intent -- fail if
+# the deployment user does not exist instead of silently creating it -- is
+# expressed as an explicit check first. Creating the user here would hand the
+# deployment a home directory and a UID it never asked for, on a host whose
+# image is expected to provide the user already.
+- name: Check that the deployment user exists
+  ansible.builtin.command:
+    cmd: getent passwd {{ deploy_user }}
+  register: deploy_user_passwd
+  changed_when: false
+  failed_when: deploy_user_passwd.rc != 0
+
+- name: Abort if the deployment user does not exist
+  ansible.builtin.assert:
+    that:
+      - deploy_user_passwd.rc == 0
+      - deploy_user_passwd.stdout | length > 0
+    fail_msg: >-
+      The deployment user {{ deploy_user }} does not exist on
+      {{ inventory_hostname }}. Create it first: this playbook only adds it to
+      the docker group, it does not create accounts.
+    quiet: true
+
+- name: Add the deployment user to the docker group
+  # Membership of `docker` is equivalent to root without a password: a container
+  # can mount / from the host. Acceptable in a single-user lab; in production
+  # prefer rootless Docker or a dedicated service user.
+  ansible.builtin.user:
+    name: "{{ deploy_user }}"
+    groups: docker
+    append: true
+
+# `{{ '{{' }}` and `{{ '}}' }}` emit literal braces so Jinja does not try to
+# evaluate Docker's Go template. Written as-is, Ansible aborts the play with
+# "template error while templating string: unexpected '.'".
+- name: Check access to the Docker daemon
+  ansible.builtin.command:
+    cmd: "docker info --format '{{ '{{' }}.ServerVersion{{ '}}' }}'"
+  become_user: "{{ deploy_user }}"
+  register: docker_info
+  changed_when: false
+  retries: 5
+  delay: 3
+  until: docker_info.rc == 0
+  failed_when: false
+
+- name: Confirm the daemon responds
+  ansible.builtin.assert:
+    that:
+      - docker_info.rc == 0
+    fail_msg: >-
+      The user {{ deploy_user }} cannot talk to the Docker daemon. Check
+      membership of the `docker` group; the current session may need to
+      reconnect (`ssh` again) to pick up the new group.
+    quiet: true
