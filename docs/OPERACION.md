@@ -142,7 +142,9 @@ make egress-off
 
 `make deploy` (`scripts/deploy.sh`) hace, en orden:
 
-1. Comprueba que `deployment_profile` es `egress-window`.
+1. Comprueba que `deployment_profile` es `egress-window`, **solo si el run
+   necesita descargar algo** (deploy completo o tags `docker`, `stacks`,
+   `backups`, `all`).
 2. Abre el túnel IAP en `127.0.0.1:2222` y espera a que acepte conexiones.
 3. Crea un inventario temporal y registra la clave del host con `ssh-keyscan`.
 4. Ejecuta `ansible-playbook site.yml -i <inventario> -e @secrets.yml`.
@@ -151,9 +153,13 @@ make egress-off
 Para un bloque concreto o un dry-run:
 
 ```bash
-make deploy ARGS="--tags verify"
-make deploy ARGS="--check"
+make deploy ARGS="--tags verify"   # no necesita ventana de egress
+make verify                        # alias de --tags verify
+make deploy ARGS="--check"         # tampoco necesita egress
 ```
+
+Esto permite verificar o endurecer el host con la ventana cerrada, es decir, en
+el perfil de coste 0,00 USD.
 
 ### 1.6 Verificar el despliegue
 
@@ -629,7 +635,7 @@ sudo journalctl -k --since '1 hour ago' | grep -i oom
 | Síntoma | Causa probable | Solución |
 |---|---|---|
 | `apt`/`docker pull` falla con timeout | Ventana de egress cerrada | `make egress-on`, desplegar, `make egress-off` |
-| El deploy dice "The instance has no egress" | `deployment_profile` es `free-tier` | `make egress-on` |
+| El deploy dice "The instance has no egress" | `deployment_profile` es `free-tier` y el run descarga paquetes o imágenes | `make egress-on`; `make verify` no lo necesita |
 | `Conflicting values set for option Signed-By` | Quedó un `.list` legacy de Docker | `tasks/docker.yml` lo limpia; manual: `rm /etc/apt/sources.list.d/*docker*.list` |
 | `module docker_compose_v2 not found` | Faltó `ANSIBLE_COLLECTIONS_PATH` en la VM | Exportar y reinstalar colecciones |
 | `Permission denied (publickey)` | Clave distinta o túnel caído | Revisar `--private-key`, que el túnel :2222 escuche y `ssh-keyscan` |

@@ -42,14 +42,41 @@ SSH_USER="${SSH_USER:-ubuntu}"
 
 # A VM without an external address and without Cloud NAT cannot reach apt or
 # the Docker registry. Fail before spending a tunnel and a half-finished
-# deployment on it.
-PROFILE="$(terraform output -raw deployment_profile 2>/dev/null || true)"
-case "${PROFILE}" in
-  egress-window*) log "Egress window is open (${PROFILE})." ;;
-  *)
-    die "The instance has no egress. Run 'make egress-on' first, deploy, then 'make egress-off'."
-    ;;
-esac
+# deployment on it. A run that only verifies or hardens the host does not need
+# egress, so `make verify` keeps working after `make egress-off`.
+REQUIRE_EGRESS=1
+prev=""
+for arg in "$@"; do
+  case "${arg}" in
+    --check|--syntax-check|--list-tags) REQUIRE_EGRESS=0 ;;
+    --tags=*|-t=*)
+      tags="${arg#*=}"
+      case ",${tags}," in
+        *,docker,*|*,stacks,*|*,backups,*|*,all,*) ;;
+        *) REQUIRE_EGRESS=0 ;;
+      esac
+      ;;
+  esac
+  if [[ "${prev}" == "--tags" || "${prev}" == "-t" ]]; then
+    case ",${arg}," in
+      *,docker,*|*,stacks,*|*,backups,*|*,all,*) ;;
+      *) REQUIRE_EGRESS=0 ;;
+    esac
+  fi
+  prev="${arg}"
+done
+
+if [[ "${REQUIRE_EGRESS}" -eq 1 ]]; then
+  PROFILE="$(terraform output -raw deployment_profile 2>/dev/null || true)"
+  case "${PROFILE}" in
+    egress-window*) log "Egress window is open (${PROFILE})." ;;
+    *)
+      die "The instance has no egress. Run 'make egress-on' first, deploy, then 'make egress-off'."
+      ;;
+  esac
+else
+  log "This run does not need egress (verify/hardening or --check)."
+fi
 
 INVENTORY="$(mktemp "${TMPDIR:-/tmp}/gcp-inventory.XXXXXX.ini")"
 TUNNEL_LOG="$(mktemp "${TMPDIR:-/tmp}/iap-tunnel.XXXXXX.log")"

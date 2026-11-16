@@ -33,7 +33,8 @@ Cambios relevantes del proyecto. Formato inspirado en
   (conservado fuera del repositorio, en `.sesion/`).
 - **Makefile y `scripts/deploy.sh`.** El flujo gratuito queda en `make plan`,
   `make egress-on`, `make deploy`, `make egress-off`; el túnel se cierra con
-  `trap` aunque Ansible falle.
+  `trap` aunque Ansible falle. `make verify` y `--check` funcionan con la
+  ventana cerrada: solo los runs que descargan paquetes o imágenes la exigen.
 
 ### Corregido
 
