@@ -4,12 +4,24 @@ What to do when each alert fires. Referenced from the `runbook` annotations in
 `monitoring/prometheus/alerts.yml`.
 
 Access: the admin ports are not published to the internet. Everything goes
-through an SSH tunnel over IAP.
+through an SSH tunnel over IAP, and in the default free profile the VM has no
+public IP at all.
 
 ```bash
-# Expose Grafana and Prometheus on localhost
-gcloud compute ssh instancia-devops-gcp --tunnel-through-iap --zone us-central1-a --tunnel-iap \
-  -L 3000:localhost:3000 -L 9090:localhost:9090
+# Parameters of the current deployment
+export PROJECT="$(gcloud config get-value project)"
+export ZONE="us-central1-a"                 # terraform.tfvars
+export INSTANCE="instancia-devops-gcp"      # terraform output -raw instance_name
+
+# Expose Grafana, Prometheus and Alertmanager on localhost
+gcloud compute ssh "$INSTANCE" --tunnel-through-iap \
+  --project "$PROJECT" --zone "$ZONE" \
+  -L 3000:localhost:3000 -L 9090:localhost:9090 -L 9093:localhost:9093
+
+# Nginx Proxy Manager admin (81) and the web endpoint (80), free profile
+gcloud compute ssh "$INSTANCE" --tunnel-through-iap \
+  --project "$PROJECT" --zone "$ZONE" \
+  -L 8081:localhost:81 -L 8080:localhost:80
 ```
 
 ---
@@ -172,40 +184,44 @@ The 30 GB free tier disk cannot be enlarged, so space has to be reclaimed.
 
 ## Contenedores
 
-**Alerts:** `ContainerMemoryLimitExceeded`, `ContainerMemoryLimitCritical`,
-`ContainerKilledByOOM`, `ContainerRestarted`, `ContainerFilesystemSpaceLow`,
-`ContainerAbsentFromScrape`
+There are **no container-level alerts any more.** They used to come from
+cAdvisor (`ContainerMemoryLimitExceeded`, `ContainerKilledByOOM`,
+`ContainerAbsentFromScrape`, ...) and were removed together with it.
 
-These come from cAdvisor and answer a question the host-level alerts cannot:
-which of the seven containers is causing the pressure.
+The reason was the box, not the concept: on the e2-micro behind a `pd-standard`
+boot disk, cAdvisor's per-container metadata polling was the single largest
+disk consumer, driving `io-wait` to ~90% (measured) while the host was
+otherwise idle. Removing it brought io-wait to ~1.3%. Container alerts simply
+were not worth the host that produced them.
 
-1. Rank the containers by memory against their own limit:
+What is left answers the same question with host-level signals:
+
+1. Which container is causing the pressure? Rank them against their own limits:
    ```bash
    docker stats --no-stream --format \
      'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.CPUPerc}}'
    ```
-   Or from metrics:
-   ```bash
-   curl -s 'http://localhost:9090/api/v1/query?query=container_memory_working_set_bytes' \
-     | python3 -m json.tool | head -40
-   ```
 2. If a container is at its ceiling, look at its logs before raising the limit.
    On 1 GB, raising `mem_limit` usually moves the problem onto the host, where
-   the OOM killer picks a different victim.
-3. `ContainerKilledByOOM` means the kernel, not the application, ended it. The
-   container has been restarted and its in-memory state is gone:
+   the OOM killer picks a different victim (watch the `HostHighMemoryUsage`
+   alert and `host_kill` metrics instead).
+3. "Was the kernel the one that ended it?" still applies when a process dies:
    ```bash
    docker inspect --format '{{.State.OOMKilled}} {{.RestartCount}}' <container>
    ```
-4. `ContainerAbsentFromScrape` means cAdvisor lost a container entirely. Check
-   cAdvisor first, because if cAdvisor is down, every container alert is blind:
-   ```bash
-   docker compose ps cadvisor
-   docker compose logs --tail=50 cadvisor
-   ```
 
-The Grafana panel "Memory vs limit, per container" shows the same data as a
-gauge per container, which is faster to read during an incident.
+The Grafana panel "Memory vs limit, per container" was Removed with the alerts,
+because it depended on the same cAdvisor data. Container memory is visible in
+`docker stats` and at the host level in node-exporter metrics.
+
+**To bring container alerts back** you have to restore cAdvisor first: add the
+`cadvisor` service to `monitoring/docker-compose.yml`, the scrape job to
+`monitoring/prometheus/prometheus.yml`, and the `containers` group to
+`monitoring/prometheus/alerts.yml`. The comments left at each removal site
+describe the exact shape, and the versions are pinned in
+`group_vars/all/main.yml`. Do not do this on the live box without re-checking
+io-wait afterwards: it is exactly the change that already cost this project a
+week of false alarms.
 
 ---
 
@@ -237,12 +253,15 @@ human is told. Turn on real delivery with:
 
 ```bash
 ansible-playbook site.yml -i inventory.example.ini \
-  -e "grafana_admin_password=..." \
   -e "alertmanager_webhook_url=https://hooks.example.com/services/..."
 ```
 
-The URL is a credential. It reaches the instance as an Ansible variable, is
-rendered into `alertmanager.yml` with mode `0600`, and is never committed.
+The URL is a credential to be passed like `grafana_admin_password`: both go in
+`~/group_vars/all/local.yml` on the instance (mode `0600`, never committed, wins
+the variable merge over `group_vars/all/main.yml` because files are read in
+alphabetical order). `alertmanager.yml` is rendered from the `.j2` template with
+mode `0600`, and omitting the variable renders the delivery-discarding `"null"`
+receiver instead of failing.
 
 **Note on YAML:** the receiver name is quoted, `"null"`, on purpose. Unquoted,
 YAML reads it as the null value and Alertmanager refuses to start.

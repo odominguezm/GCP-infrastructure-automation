@@ -10,6 +10,7 @@
 #
 #   terraform fmt      formatting, free
 #   terraform validate  catches a typo in a resource name before it reaches a plan
+#   free-tier defaults  fails if a default drifts into a billed resource
 #   tflint              provider-specific mistakes validate() does not catch
 #   checkov             misconfigured or public cloud resources, incl. the firewall
 #   ansible-lint        playbooks that only fail once they are running against a VM
@@ -65,6 +66,32 @@ jobs:
       - name: Validate
         run: terraform validate
 
+      - name: Assert the default profile stays in the free tier
+        # The default `terraform apply` must never create a billed resource. The
+        # variable validations stop an explicit override (e2-small, pd-balanced,
+        # another region), but nothing stops a changed default. `terraform
+        # console` evaluates the defaults without credentials or an apply.
+        #
+        # CI has no terraform.tfvars (it is gitignored), so these are the
+        # documented defaults of a fresh clone.
+        run: |
+          set -euo pipefail
+          value() {
+            echo "var.$1" | terraform console -var project_id=ci 2>/dev/null
+          }
+          test "$(value enable_public_ip)" = "false"
+          test "$(value enable_egress)" = "false"
+          test "$(value enable_snapshots)" = "false"
+          test "$(value enable_vpc_flow_logs)" = "false"
+          test "$(value machine_type)" = '"e2-micro"'
+          test "$(value boot_disk_type)" = '"pd-standard"'
+          test "$(value disk_size_gb)" = "30"
+          case "$(value region)" in
+            '"us-central1"'|'"us-west1"'|'"us-east1"') ;;
+            *) echo "::error::Default region is not an Always Free region"; exit 1 ;;
+          esac
+          echo "Default profile is Always Free (no external IP, no snapshots, no flow logs)."
+
       - name: tflint
         uses: terraform-linters/setup-tflint@v5
         with:
@@ -76,6 +103,21 @@ jobs:
       - name: Checkov
         # External checks are disabled on purpose: they need provider credentials
         # and would fail here, which trains people to ignore a red pipeline.
+        #
+        # Skipped checks and why:
+        #   CKV_GCP_40  a public IP is a supported opt-in profile (enable_public_ip);
+        #               the default is private, but the check cannot see variables.
+        #   CKV_GCP_106 same decision: when enable_public_ip = true, ports 80/443
+        #               are intentionally public, served by Nginx Proxy Manager.
+        #   CKV_GCP_38  Google-managed key encryption is fine for a lab; CSEK
+        #               adds a key-management burden with no security gain here.
+        #   CKV_GCP_62  access logging would bill a second bucket to say who
+        #               touched a bucket that only ever receives cron-generated
+        #               backups. Revisit if the bucket ever stores anything else.
+        #   CKV_GCP_114 the bucket sets public_access_prevention = "ENFORCED";
+        #               the check's schema in the pinned checkov does not know
+        #               the attribute (added to the google provider later), so
+        #               it always reports a false positive.
         run: >-
           pip install checkov &&
           checkov
@@ -84,6 +126,7 @@ jobs:
             --quiet
             --compact
             --skip-download
+            --skip-check CKV_GCP_40,CKV_GCP_106,CKV_GCP_38,CKV_GCP_62,CKV_GCP_114
             --external-checks-dir "" 2>&1 | tee checkov.log
         continue-on-error: false
         env:
@@ -207,7 +250,10 @@ jobs:
                       errors.append(f"{name}: severity must be critical, warning or info")
           prom = yaml.safe_load(open('monitoring/prometheus/prometheus.yml'))
           jobs = {j['job_name'] for j in prom['scrape_configs']}
-          for required in ('prometheus', 'node_exporter', 'cadvisor', 'alertmanager'):
+          # cAdvisor is deliberately absent (see group_vars/all/main.yml): its job is
+          # not required, only optional, so restoring the exporter has to be an
+          # explicit decision and not something CI silently accepts.
+          for required in ('prometheus', 'node_exporter', 'alertmanager'):
               if required not in jobs:
                   errors.append(f"prometheus.yml is missing the scrape job {required}")
           if 'alertmanagers' not in prom.get('alerting', {}):

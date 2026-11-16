@@ -4,8 +4,9 @@
 # Working directory: holds the provider binaries (~86 MB).
 .terraform/
 
-# State holds IPs and infrastructure metadata in cleartext. The real state lives
-# in a GCS bucket with versioning and locking.
+# State holds IPs and infrastructure metadata in cleartext. There is NO remote
+# backend configured: the state is local to this machine. Back it up before
+# operating (see docs/OPERACION.md) and never commit it.
 *.tfstate
 *.tfstate.*
 *.tfplan
@@ -61,6 +62,13 @@ id_ansible_github*
 .env
 !.env.example
 
+# Operator-created extra-vars file with the Grafana password (docs/EJECUCION.md).
+# The documented workflow writes `secrets.yml` in the repository root; without
+# this rule a `git add -A` would commit the password.
+secrets.yml
+secrets.yaml
+*.secrets.yml
+
 # Generated dashboard JSON is NOT ignored on purpose: it is deployed as-is and
 # CI fails if it drifts from monitoring/grafana/dashboards/build_dashboard.py.
 # Ignoring it would break the deployment, which is why the generator is
@@ -79,5 +87,13 @@ Thumbs.db
 
 *.log
 
+# Local housekeeping (old Terraform state backups, scratch files): never
+# versioned. Use `.local/` instead of leaving them next to the code.
+.local/
+
 # AI session notes: personal working notes, not documentation.
 .ai-context.md
+# Session handover notes. Same reasoning, and this is a portfolio repository:
+# these files name real infrastructure and may quote command lines that carry
+# credentials, so they never belong in version control.
+.sesion/
