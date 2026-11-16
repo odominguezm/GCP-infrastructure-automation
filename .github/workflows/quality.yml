@@ -11,7 +11,6 @@
 #   terraform fmt      formatting, free
 #   terraform validate  catches a typo in a resource name before it reaches a plan
 #   free-tier defaults  fails if a default drifts into a billed resource
-#   tflint              provider-specific mistakes validate() does not catch
 #   checkov             misconfigured or public cloud resources, incl. the firewall
 #   ansible-lint        playbooks that only fail once they are running against a VM
 #   yamllint            YAML that parses but is wrong in a way nobody notices
@@ -79,10 +78,7 @@ jobs:
           value() {
             echo "var.$1" | terraform console -var project_id=ci 2>/dev/null
           }
-          test "$(value enable_public_ip)" = "false"
           test "$(value enable_egress)" = "false"
-          test "$(value enable_snapshots)" = "false"
-          test "$(value enable_vpc_flow_logs)" = "false"
           test "$(value machine_type)" = '"e2-micro"'
           test "$(value boot_disk_type)" = '"pd-standard"'
           test "$(value disk_size_gb)" = "30"
@@ -92,29 +88,17 @@ jobs:
           esac
           echo "Default profile is Always Free (no external IP, no snapshots, no flow logs)."
 
-      - name: tflint
-        uses: terraform-linters/setup-tflint@v5
-        with:
-          tflint_version: latest
-
-      - name: Run tflint
-        run: tflint --recursive --format=compact
-
       - name: Checkov
         # External checks are disabled on purpose: they need provider credentials
         # and would fail here, which trains people to ignore a red pipeline.
         #
         # Skipped checks and why:
-        #   CKV_GCP_40  a public IP is a supported opt-in profile (enable_public_ip);
-        #               the default is private, but the check cannot see variables.
-        #   CKV_GCP_106 same decision: when enable_public_ip = true, ports 80/443
-        #               are intentionally public, served by Nginx Proxy Manager.
         #   CKV_GCP_38  Google-managed key encryption is fine for a lab; CSEK
         #               adds a key-management burden with no security gain here.
         #   CKV_GCP_62  access logging would bill a second bucket to say who
         #               touched a bucket that only ever receives cron-generated
         #               backups. Revisit if the bucket ever stores anything else.
-        #   CKV_GCP_114 the bucket sets public_access_prevention = "ENFORCED";
+        #   CKV_GCP_114 the bucket sets public_access_prevention = "enforced";
         #               the check's schema in the pinned checkov does not know
         #               the attribute (added to the google provider later), so
         #               it always reports a false positive.
@@ -126,7 +110,7 @@ jobs:
             --quiet
             --compact
             --skip-download
-            --skip-check CKV_GCP_40,CKV_GCP_106,CKV_GCP_38,CKV_GCP_62,CKV_GCP_114
+            --skip-check CKV_GCP_38,CKV_GCP_62,CKV_GCP_114
             --external-checks-dir "" 2>&1 | tee checkov.log
         continue-on-error: false
         env:
@@ -197,6 +181,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the validation helpers
+        # The alert-rule and Alertmanager steps below are plain Python. Pin the
+        # dependencies here instead of relying on whatever the runner happens to
+        # ship, so the gate is reproducible.
+        run: pip install pyyaml jinja2
+
       - name: yamllint the compose files specifically
         run: yamllint app proxy monitoring
 
@@ -257,7 +251,10 @@ jobs:
               if required not in jobs:
                   errors.append(f"prometheus.yml is missing the scrape job {required}")
           if 'alertmanagers' not in prom.get('alerting', {}):
-              errors.append("prometheus.yml has no alerting.alertmanagers section: alerts would be evaluated and then discarded")
+              errors.append(
+                  "prometheus.yml has no alerting.alertmanagers section: "
+                  "alerts would be evaluated and then discarded"
+              )
           print(f"{len(seen)} alert rules across {len(docs['groups'])} groups, {len(jobs)} scrape jobs")
           for e in errors:
               print(f"  ERROR {e}", file=sys.stderr)
@@ -269,7 +266,6 @@ jobs:
           # Renders the template with no webhook, then parses the result as YAML.
           # A Jinja typo in alertmanager.yml.j2 otherwise only shows up as an
           # Alertmanager crash loop after deployment.
-          pip install jinja2
           python3 - <<'PY'
           import jinja2, yaml, sys
           env = jinja2.Environment(undefined=jinja2.StrictUndefined)

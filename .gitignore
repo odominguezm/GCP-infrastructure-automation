@@ -33,6 +33,7 @@ group_vars/all/local.yml
 
 *.retry
 .ansible_facts_cache
+.ansible/
 
 # ==========================================
 # 3. SECRETS
@@ -62,7 +63,7 @@ id_ansible_github*
 .env
 !.env.example
 
-# Operator-created extra-vars file with the Grafana password (docs/EJECUCION.md).
+# Operator-created extra-vars file with the Grafana password (docs/OPERACION.md).
 # The documented workflow writes `secrets.yml` in the repository root; without
 # this rule a `git add -A` would commit the password.
 secrets.yml

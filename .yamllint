@@ -28,6 +28,16 @@ rules:
   # a review topic.
   comments:
     min-spaces-from-content: 1
+  comments-indentation: false
+
+  # Values required by ansible-lint's bundled YAML profile. They are not
+  # relaxations: implicit/explicit octal modes are a real source of bugs, and a
+  # single space inside braces is the house style.
+  braces:
+    max-spaces-inside: 1
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
 
   # Duplicated keys are a real bug class in YAML and cost nothing to forbid.
   key-duplicates: enable
@@ -37,5 +47,6 @@ rules:
 
 ignore: |
   .terraform/
+  .ansible/
   node_modules/
   *.tfvars
