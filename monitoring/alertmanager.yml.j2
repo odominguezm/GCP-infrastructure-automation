@@ -100,11 +100,3 @@ inhibit_rules:
     target_matchers:
       - alertname =~ "HostHighMemoryUsage|HostHighSwapUsage"
     equal: ["instance"]
-
-  # A container being OOM-killed makes its own memory alert fire at the same
-  # moment Prometheus stops scraping it. The restart is the real problem.
-  - source_matchers:
-      - alertname = "TargetDown"
-    target_matchers:
-      - alertname =~ "ContainerMemoryLimitExceeded|ContainerHighMemoryUsage"
-    equal: ["instance"]

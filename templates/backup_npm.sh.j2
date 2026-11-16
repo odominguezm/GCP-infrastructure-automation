@@ -122,6 +122,12 @@ find "${BACKUP_DIR}" \
 # Authentication is implicit, via the instance's service account, which holds
 # roles/storage.objectCreator on the bucket. No key file, nothing to rotate.
 # ------------------------------------------------------------------
+# BACKUP_STRICT_UPLOAD=1 makes an upload failure fatal. The deployment test sets
+# it so a green run proves the object really reached the bucket. Cron does not,
+# so a transient network problem never turns into a failed nightly backup that
+# looks like the database is broken.
+readonly STRICT_UPLOAD="${BACKUP_STRICT_UPLOAD:-0}"
+
 if command -v gsutil >/dev/null 2>&1; then
   log "Uploading to gs://${BUCKET}/npm/..."
 
@@ -129,11 +135,15 @@ if command -v gsutil >/dev/null 2>&1; then
   # path is derived from the source filename, so re-running never overwrites.
   # Without -m, a large upload would be split into a separate request per object
   # and multipart is noticeably faster.
-  if gsutil -m cp "${DESTINATION}" "gs://${BUCKET}/npm/" 2>>/dev/null; then
+  if gsutil -m cp "${DESTINATION}" "gs://${BUCKET}/npm/"; then
     log "Upload OK: gs://${BUCKET}/npm/$(basename "${DESTINATION}")"
+  elif [[ "${STRICT_UPLOAD}" == "1" ]]; then
+    fail "upload failed and BACKUP_STRICT_UPLOAD=1. The local copy is valid, but the off-site copy is missing."
   else
     log "WARNING: upload failed. The local copy at ${DESTINATION} is still valid."
   fi
+elif [[ "${STRICT_UPLOAD}" == "1" ]]; then
+  fail "gsutil is not installed and BACKUP_STRICT_UPLOAD=1."
 else
   log "WARNING: gsutil not installed, skipping the off-site copy."
 fi

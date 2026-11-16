@@ -19,6 +19,3 @@ collections:
   # ansible.posix.profile_tasks callback declared in ansible.cfg.
   - name: ansible.posix
     version: ">=1.5.4"
-
-  - name: community.general
-    version: ">=8.0.0"

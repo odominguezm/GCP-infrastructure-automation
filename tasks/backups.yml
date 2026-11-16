@@ -62,28 +62,23 @@
         name: google-cloud-cli
         state: present
 
+# The first deployment must fail if the backup does not work. A backup that was
+# never tested is not a backup, it is an assumption.
+#
+# When a bucket is configured the test runs with BACKUP_STRICT_UPLOAD=1, so a
+# failed upload fails the deployment. It deliberately does NOT list the bucket
+# afterwards: the instance service account only holds roles/storage.objectCreator
+# and cannot list or read objects. That is the point of the least-privilege
+# design, and `gsutil ls` here would contradict it.
 - name: Run a test backup (validates the script during the deployment)
   ansible.builtin.command: "{{ deploy_path }}/backup_npm.sh"
   become: true
   become_user: "{{ deploy_user }}"
+  environment:
+    BACKUP_STRICT_UPLOAD: "{{ '1' if backup_bucket | length > 0 else '0' }}"
   register: backup_test
   changed_when: true
-  # The first deployment must fail if the backup does not work. A backup that
-  # was never tested is not a backup, it is an assumption.
   failed_when: backup_test.rc != 0
-
-# The script deliberately downgrades an upload failure to a warning so a
-# temporary network problem does not break the cron job. That means a green
-# script is not proof that the object reached the bucket: check it here, where
-# the deployment can still fail and report it.
-- name: Confirm the off-site copy reached the bucket
-  when: backup_bucket | length > 0
-  ansible.builtin.command: "gsutil ls gs://{{ backup_bucket }}/npm/"
-  become: true
-  become_user: "{{ deploy_user }}"
-  register: offsite_check
-  changed_when: false
-  failed_when: offsite_check.rc != 0 or offsite_check.stdout | trim == ''
 
 - name: Schedule the daily backup
   ansible.builtin.cron:

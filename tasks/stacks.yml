@@ -152,13 +152,21 @@
 # ------------------------------------------------------------------
 
 - name: Fingerprint this stack's synced definitions and detect a change
-  ansible.builtin.shell: >-
-    cd "{{ deploy_path }}/{{ item.name }}" &&
-    fp=$(find {{ item.sync | map(attribute='dest') | join(' ') }} -type f -print0 | sort -z | xargs -0 sha1sum | sha1sum | cut -d' ' -f1) &&
-    mkdir -p "{{ deploy_path }}/.stack_fingerprints" &&
-    marker="{{ deploy_path }}/.stack_fingerprints/{{ item.name }}.sha1" &&
-    echo "$fp" > "$marker" &&
-    if [ ! -f "$marker.prev" ]; then echo first; elif ! cmp -s "$marker.prev" "$marker"; then echo changed; else echo same; fi &&
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd "{{ deploy_path }}/{{ item.name }}"
+    fp=$(find {{ item.sync | map(attribute='dest') | join(' ') }} \
+      -type f -print0 | sort -z | xargs -0 sha1sum | sha1sum | cut -d' ' -f1)
+    mkdir -p "{{ deploy_path }}/.stack_fingerprints"
+    marker="{{ deploy_path }}/.stack_fingerprints/{{ item.name }}.sha1"
+    echo "$fp" > "$marker"
+    if [ ! -f "$marker.prev" ]; then
+      echo first
+    elif ! cmp -s "$marker.prev" "$marker"; then
+      echo changed
+    else
+      echo same
+    fi
     cp "$marker" "$marker.prev"
   loop: "{{ compose_stacks }}"
   loop_control:
