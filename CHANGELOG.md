@@ -5,6 +5,19 @@ Cambios relevantes del proyecto. Formato inspirado en
 
 ## [2026-11-16]
 
+### Limpieza
+
+- Se eliminan las cachés locales regenerables (`.terraform/`, `.ansible/`) y los
+  backups de estado del proyecto anterior. El árbol de trabajo pasa de ~208 MB a
+  ~3 MB.
+- Se retira el `hosts.ini` local obsoleto (`ansible_connection=local`). El modo
+  in-VM queda documentado en `inventory.example.ini`; el flujo normal es
+  `make deploy`, que crea su propio inventario.
+- Los runbooks dejan de lanzar `ansible-playbook` a mano: usan `make deploy` y
+  sitúan los secretos en el checkout del operador, no en la instancia.
+- `make lint` funciona con `uvx` cuando `yamllint`/`ansible-lint` no están
+  instalados en el sistema.
+
 ### Cambiado
 
 - **Perfil Always Free real.** Por defecto no se crea IP externa, ni snapshots,

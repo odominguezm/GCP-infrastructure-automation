@@ -29,14 +29,19 @@ nothing else. `ssh ubuntu@<public-ip>` is not supposed to work.
 # Interactive session
 gcloud compute ssh "$INSTANCE" --project "$PROJECT" --zone "$ZONE" --tunnel-through-iap
 
-# Ansible can run ON the instance against a local inventory (hosts.ini uses
-# ansible_connection=local). Log in first, then:
-cd ~ && ANSIBLE_COLLECTIONS_PATH=~/.ansible/collections ansible-playbook site.yml
+# Deploy from the operator machine: the script opens the IAP tunnel, runs
+# site.yml and closes the tunnel even if Ansible fails.
+make egress-on && make deploy && make egress-off
 
 # Grafana, only reachable through the same tunnel
 gcloud compute ssh "$INSTANCE" --project "$PROJECT" --zone "$ZONE" \
   --tunnel-through-iap -L 3000:localhost:3000
 ```
+
+Running Ansible *inside* the instance is not part of the normal flow: the
+repository is not synced there, only the stack definitions are. If you
+deliberately clone it on the VM, create `hosts.ini` with
+`ansible_connection=local` as described in `inventory.example.ini`.
 
 In the default profile there are no ports open to the internet at all: Nginx
 Proxy Manager (80/443), its admin panel (81), Grafana (3000), Prometheus (9090),
@@ -269,10 +274,11 @@ If the instance is unhealthy but still exists and you want to force a new boot
 disk, `deletion_protection = true` has to be disabled first:
 
 ```bash
+# deletion_protection = false first (edit terraform.tfvars)
 terraform apply -replace google_compute_instance.vm
-# then restore the Grafana admin password into the instance, chmod 600:
-#   ~/group_vars/all/local.yml
-ansible-playbook site.yml
+# Grafana password: group_vars/all/local.yml (0600) or secrets.yml in the
+# operator checkout.
+make egress-on && make deploy && make egress-off
 # then restore the database from Cloud Storage, path A
 ```
 
@@ -282,10 +288,10 @@ The default free profile has no snapshots, so this is the normal rebuild path:
 
 1. Create the infrastructure with `terraform apply` (or restore it in a new
    project if the old one is gone).
-2. Run `ansible-playbook site.yml` by IAP or inside the VM.
+2. Deploy with `make egress-on && make deploy && make egress-off`.
 3. Restore the database from Cloud Storage, path A.
 4. Set `grafana_admin_password` again through `group_vars/all/local.yml` or
-   `--extra-vars`; it is never stored in the repository.
+   `secrets.yml`; it is never stored in the repository.
 
 ## C. Last resort: rebuild the NPM database
 

@@ -21,6 +21,12 @@ PYTHON := python3
 # Extra arguments for the Ansible run, e.g. `make deploy ARGS="--tags verify"`.
 ARGS ?=
 
+# The linters are optional tooling, not a deployment dependency. Prefer a local
+# install; fall back to `uvx` (already used in CI and by the project notes) so
+# `make lint` works on a machine that has uv but not pip.
+YAMLLINT := $(shell command -v yamllint >/dev/null 2>&1 && echo yamllint || echo "uvx yamllint")
+ANSIBLE_LINT := $(shell command -v ansible-lint >/dev/null 2>&1 && echo ansible-lint || echo "uvx ansible-lint")
+
 .PHONY: help init fmt validate plan apply destroy egress-on egress-off deploy verify tunnel fmt-check lint test dashboard
 
 help: ## Show this help
@@ -80,9 +86,9 @@ validate: ## Static validation: Terraform, Ansible and the compose files
 dashboard: ## Regenerate the Grafana dashboard from its generator
 	$(PYTHON) monitoring/grafana/dashboards/build_dashboard.py
 
-lint: ## yamllint + ansible-lint (install them first if needed)
-	yamllint .
-	ansible-lint site.yml
+lint: ## yamllint + ansible-lint (local install or uvx)
+	$(YAMLLINT) .
+	$(ANSIBLE_LINT) site.yml
 
 test: validate fmt-check dashboard ## Everything CI checks locally
 	@git diff --exit-code -- monitoring/grafana/dashboards/node-overview.json \

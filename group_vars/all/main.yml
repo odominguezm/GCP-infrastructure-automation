@@ -81,9 +81,7 @@ compose_stacks:
 # tag carries the full version, so release v13.2.3 is image 13.2.3.
 #
 # cAdvisor is DELIBERATELY NOT DEPLOYED, so its version is kept only so the
-# runbook of restoration has a pinned tag to use. Diagnosis (the reason the
-# exporter is gone, and the tension about the disk type, are open questions at
-# the bottom of `.sesion/RESUMEN-2026-10-04.md`):
+# runbook of restoration has a pinned tag to use. Diagnosis:
 #
 #   The boot disk is pd-standard (network-attached, ~22-45 baseline IOPS on
 #   30 GB), and cAdvisor's job is to walk /sys/fs/cgroup and the Docker overlay

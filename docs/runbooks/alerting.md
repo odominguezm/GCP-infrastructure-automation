@@ -252,16 +252,15 @@ notifications and discards them, so the pipeline is healthy end to end but no
 human is told. Turn on real delivery with:
 
 ```bash
-ansible-playbook site.yml -i inventory.example.ini \
-  -e "alertmanager_webhook_url=https://hooks.example.com/services/..."
+make deploy ARGS='-e "alertmanager_webhook_url=https://hooks.example.com/services/..."'
 ```
 
-The URL is a credential to be passed like `grafana_admin_password`: both go in
-`~/group_vars/all/local.yml` on the instance (mode `0600`, never committed, wins
-the variable merge over `group_vars/all/main.yml` because files are read in
-alphabetical order). `alertmanager.yml` is rendered from the `.j2` template with
-mode `0600`, and omitting the variable renders the delivery-discarding `"null"`
-receiver instead of failing.
+The URL is a credential to be passed like `grafana_admin_password`: put both in
+`group_vars/all/local.yml` in the operator checkout (mode `0600`, gitignored,
+wins the variable merge over `group_vars/all/main.yml` because files are read in
+alphabetical order), or pass them in `secrets.yml`. `alertmanager.yml` is
+rendered from the `.j2` template with mode `0600`, and omitting the variable
+renders the delivery-discarding `"null"` receiver instead of failing.
 
 **Note on YAML:** the receiver name is quoted, `"null"`, on purpose. Unquoted,
 YAML reads it as the null value and Alertmanager refuses to start.

@@ -129,8 +129,7 @@ make deploy ARGS="--tags verify"    # o --check para un dry-run
 
 > ⚠️ **No hay backend remoto de Terraform.** El estado es local
 > (`terraform.tfstate`). Haz copia antes de operar (ver `docs/OPERACION.md`). El
-> estado del proyecto anterior está archivado en
-> `.local/state-backups/deleted-project/` y **no** debe reutilizarse.
+> proyecto anterior se eliminó y su estado no forma parte de este repositorio.
 
 ## 📚 Documentación
 

@@ -31,8 +31,8 @@ ansible-galaxy collection install -r requirements.yml
 
 > **No hay backend remoto de Terraform.** El estado vive en
 > `terraform.tfstate` en este equipo. Haz copia antes de operar y no lo borres.
-> El estado de la instancia eliminada se archivó en
-> `.local/state-backups/deleted-project/`; no lo copies de vuelta.
+> El proyecto anterior se eliminó: no hay estado antiguo que importar ni
+> reutilizar.
 
 ### 1.2 Crear el proyecto y proteger el presupuesto
 
@@ -458,9 +458,9 @@ mkdir -p .local/state-backups
 cp terraform.tfstate ".local/state-backups/$(date +%Y%m%d_%H%M%S).tfstate"
 ```
 
-- El estado de la instancia eliminada está en
-  `.local/state-backups/deleted-project/`. **No** lo devuelvas a la raíz: un
-  `apply` intentaría reconciliar recursos que ya no existen.
+- El proyecto anterior se eliminó: no queda estado antiguo en el repositorio ni
+  conviene recrearlo. Un `apply` solo debe reconciliar recursos del proyecto
+  actual.
 - Riesgo abierto: no hay `backend` remoto. Si el equipo se pierde, se pierde el
   estado. Considerar migrar a un bucket GCS con versioning y locking.
 
@@ -514,8 +514,10 @@ make deploy ARGS="--skip-tags hardening"
 marcado `always` para que un deploy nunca termine verde con un stack caído.
 
 Si ejecutas Ansible **dentro** de la VM (solo si el repositorio ya está allí),
-exporta `ANSIBLE_COLLECTIONS_PATH=/home/ubuntu/.ansible/collections`; sin eso
-Ansible usa las colecciones del sistema y `docker_compose_v2` no existe.
+crea `hosts.ini` con `ansible_connection=local` (el bloque comentado de
+`inventory.example.ini`) y exporta
+`ANSIBLE_COLLECTIONS_PATH=/home/ubuntu/.ansible/collections`; sin eso Ansible
+usa las colecciones del sistema y `docker_compose_v2` no existe.
 
 ## 11. Validar sin desplegar
 
