@@ -13,22 +13,40 @@ variable "region" {
   type        = string
   description = "Region where the infrastructure is deployed."
   default     = "us-central1"
+
+  # The Always Free e2-micro quota only exists in these three US regions.
+  # Deploying anywhere else silently turns a free lab into a billed one.
+  validation {
+    condition     = contains(["us-central1", "us-west1", "us-east1"], var.region)
+    error_message = "region must be us-central1, us-west1 or us-east1: the Always Free e2-micro is only offered there."
+  }
 }
 
 variable "zone" {
   type        = string
-  description = "Zone the instance lives in."
+  description = "Zone the instance lives in. Must belong to var.region."
   default     = "us-central1-a"
+
+  validation {
+    condition     = startswith(var.zone, "${var.region}-")
+    error_message = "zone must belong to the selected region, for example us-central1-a."
+  }
 }
 
 variable "required_apis" {
   type        = list(string)
   description = <<-EOT
     GCP APIs enabled on the project.
-    storage.googleapis.com is required for the off-site backup bucket, and
-    iap.googleapis.com for the SSH tunnel that replaces direct port 22 access.
+    compute for the VM and network, storage for the off-site backup bucket,
+    iap for the SSH tunnel that replaces public port 22, and iam because
+    Terraform creates a dedicated service account for the instance.
   EOT
-  default     = ["compute.googleapis.com", "storage.googleapis.com", "iap.googleapis.com"]
+  default = [
+    "compute.googleapis.com",
+    "storage.googleapis.com",
+    "iap.googleapis.com",
+    "iam.googleapis.com",
+  ]
 }
 
 # ---------- Network ----------
@@ -57,14 +75,52 @@ variable "subnet_cidr" {
 
 variable "static_address_name" {
   type        = string
-  description = "Name of the reserved static public IP resource."
-  default     = "instancia-devops-gcp-ip"
+  description = "Name of the reserved static public IP resource. Only used when enable_public_ip = true."
+  default     = "devops-lab-ip"
 }
 
 # ---------- Network exposure ----------
+variable "enable_public_ip" {
+  type        = bool
+  description = <<-EOT
+    Give the VM an external IP and open 80/443 to the internet.
+
+    Default false: the Always Free tier covers the VM, its 30 GB standard disk
+    and 1 GB/month of egress, but it does NOT cover external IP addresses.
+    Google charges $0.005/hour (~$3.65/month) for a static or ephemeral IP in
+    use on a standard VM, with only one free hour per month per account.
+
+    With false, every administrative and web port is reached through an IAP
+    tunnel (also free), and the deployment stays at $0.00 in Compute Engine.
+    Set true only if a publicly reachable demo is worth the hourly address cost.
+  EOT
+  default     = false
+}
+
+variable "enable_egress" {
+  type        = bool
+  description = <<-EOT
+    Attach an ephemeral external IP so the instance can reach the internet.
+
+    This is NOT the same as enable_public_ip: it opens no inbound port, it only
+    gives the VM a way out. Without an external IP (or Cloud NAT, which is
+    billed hourly) a VM cannot reach apt mirrors, the Docker registry or
+    packages.cloud.google.com, so a deployment cannot install anything.
+
+    It exists because the first Ansible run needs egress even in the free
+    profile. Turn it on before deploying and off afterwards: the Always Free
+    tier includes one hour of external IP per account per month, so a deploy
+    window costs 0.00 to a few cents. Leaving it on costs $0.005/hour
+    (~$3.65/month).
+
+    enable_public_ip = true implies this, so it does not need to be set too.
+  EOT
+  default     = false
+}
+
 variable "web_source_ranges" {
   type        = list(string)
-  description = "Source ranges allowed to reach ports 80/443."
+  description = "Source ranges allowed to reach ports 80/443. Only used when enable_public_ip = true."
   default     = ["0.0.0.0/0"]
 }
 
@@ -96,19 +152,38 @@ variable "instance_name" {
 
 variable "machine_type" {
   type        = string
-  description = "Machine type. e2-micro is inside the free tier in us-central1."
+  description = "Machine type. e2-micro is the only Compute Engine shape included in the Always Free tier."
   default     = "e2-micro"
 
   validation {
-    condition     = can(regex("^e2-(micro|small)$", var.machine_type))
-    error_message = "This project targets the free tier: use e2-micro or e2-small."
+    condition     = var.machine_type == "e2-micro"
+    error_message = "machine_type must be e2-micro: e2-small and larger are billed and are not part of the Always Free tier."
   }
 }
 
 variable "image" {
   type        = string
   description = "Guest OS image for the instance."
-  default     = "ubuntu-os-cloud/ubuntu-2404-lts"
+  # 22.04 LTS is used by the Ansible playbook and the Docker/Ansible packages it
+  # installs. Changing the family recreates the boot disk, so it is a deliberate
+  # migration, not a routine bump.
+  default = "ubuntu-os-cloud/ubuntu-2204-lts"
+}
+
+variable "boot_disk_type" {
+  type        = string
+  description = <<-EOT
+    Boot disk class of the instance.
+    Only pd-standard is part of the Always Free tier (30 GB-months). pd-balanced
+    and pd-ssd are billed, and disk type is ForceNew, so changing it also
+    replaces the VM and its data.
+  EOT
+  default     = "pd-standard"
+
+  validation {
+    condition     = var.boot_disk_type == "pd-standard"
+    error_message = "boot_disk_type must be pd-standard: it is the only disk class covered by the Always Free tier."
+  }
 }
 
 variable "disk_size_gb" {
@@ -120,6 +195,19 @@ variable "disk_size_gb" {
     condition     = var.disk_size_gb >= 10 && var.disk_size_gb <= 30
     error_message = "disk_size_gb must be between 10 and 30 to stay on the free tier."
   }
+}
+
+variable "enable_vpc_flow_logs" {
+  type        = bool
+  description = <<-EOT
+    Enable VPC Flow Logs on the subnet.
+
+    Default false: flow logs are billed per GiB ($0.25/GiB up to 10,240 GiB) and
+    are not covered by the Always Free tier. On a lab with almost no traffic the
+    monthly cost is negligible, but it is not zero. Set true when the audit
+    trail is worth more than the line item.
+  EOT
+  default     = false
 }
 
 variable "enable_shielded_vm" {
@@ -195,10 +283,21 @@ variable "backup_bucket_name" {
 variable "backup_bucket_location" {
   type        = string
   description = <<-EOT
-    Bucket location. A regional bucket in the same region as the instance keeps
-    the upload on the free egress tier; multi-region does not.
+    Bucket location. Must be the same region as the instance: Cloud Storage's
+    Always Free 5 GB only applies in us-central1, us-west1 and us-east1, and a
+    same-region bucket keeps traffic on the free path.
   EOT
   default     = "us-central1"
+
+  validation {
+    # Only enforced when a bucket is actually created: a deployment without
+    # off-site backups must not fail because an unused default lives elsewhere.
+    condition = var.backup_bucket_name == "" || (
+      contains(["us-central1", "us-west1", "us-east1"], var.backup_bucket_location) &&
+      var.backup_bucket_location == var.region
+    )
+    error_message = "backup_bucket_location must be one of us-central1, us-west1 or us-east1, and must match var.region when backup_bucket_name is set."
+  }
 }
 
 variable "backup_bucket_retention_days" {
@@ -215,18 +314,28 @@ variable "backup_bucket_retention_days" {
 variable "snapshot_retention_days" {
   type        = number
   description = <<-EOT
-    Days to keep disk snapshots. Snapshots cover the whole instance, including
-    the Docker volumes that the database backup script does not touch.
+    Days to keep scheduled disk snapshots. Only used when enable_snapshots is
+    true. Snapshots cover the whole instance, including Docker volumes.
   EOT
   default     = 7
+
+  validation {
+    condition     = var.snapshot_retention_days >= 1 && var.snapshot_retention_days <= 7
+    error_message = "snapshot_retention_days must be between 1 and 7 to bound snapshot storage cost."
+  }
 }
 
 variable "enable_snapshots" {
   type        = bool
   description = <<-EOT
-    Scheduled disk snapshots. Each snapshot costs roughly $0.026/GB-month on the
-    free tier's persistent disk class, so 30 GB x 7 days stays under a dollar.
-    Set to false to skip them.
+    Scheduled disk snapshots.
+
+    Default false: snapshots are NOT part of the Compute Engine Always Free
+    tier. A 30 GB boot disk with 7 daily incremental snapshots typically costs
+    around $1/month, and that line item grows with retention. Keep it false for
+    a strictly $0.00 lab; set it true when full-instance recovery is worth the
+    small monthly charge. Off-site database backups in Cloud Storage remain
+    free and enabled independently.
   EOT
-  default     = true
+  default     = false
 }

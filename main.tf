@@ -6,7 +6,9 @@
 # ============================================================
 
 terraform {
-  required_version = ">= 1.5.0"
+  # 1.9 is the first release where an input-variable validation may reference
+  # another input variable (zone checks region; bucket location checks region).
+  required_version = ">= 1.9.0"
 
   required_providers {
     google = {
@@ -51,24 +53,35 @@ resource "google_compute_subnetwork" "subnet" {
   network                  = google_compute_network.vpc.id
   private_ip_google_access = true
 
+  # VPC Flow Logs are opt-in because they are billed per GiB and are not part
+  # of the Always Free tier. When enabled they are the only way to know who was
+  # talking to the instance after the fact (CKV_GCP_26).
+  dynamic "log_config" {
+    for_each = var.enable_vpc_flow_logs ? [1] : []
+
+    content {
+      aggregation_interval = "INTERVAL_5_SEC"
+      flow_sampling        = 0.5
+      metadata             = "INCLUDE_ALL_METADATA"
+    }
+  }
+
   depends_on = [google_project_service.required_apis]
 }
 
 # ------------------------------------------------------------
-# 2. Static public IP
+# 2. Static public IP (optional)
 # ------------------------------------------------------------
-# Reserving the address as a resource (instead of clicking through the console)
-# is part of IaC: the address lives in Terraform state and survives the
-# destruction and recreation of the VM.
+# External IPs are the one Compute Engine line item the Always Free tier does
+# not cover: $0.005/hour for an address in use on a standard VM, with only one
+# free hour per account per month. The default profile therefore runs without
+# one and reaches every port through IAP.
 #
-# NOTE: to adopt an address that was already reserved by hand (in this project
-# 34.60.225.223, named "lab"), rename it first and then import it. Otherwise
-# Terraform reserves a brand new IP:
-#   gcloud compute addresses set-address lab \
-#     --new-address=instancia-devops-gcp-ip --region=us-central1 --project=devops-lab-orlando
-#   terraform import google_compute_address.static_ip \
-#     devops-lab-orlando/us-central1/instancia-devops-gcp-ip
+# When enable_public_ip = true the address is reserved as a resource so it
+# survives a VM recreate, and the VM gets it through access_config below.
 resource "google_compute_address" "static_ip" {
+  count = var.enable_public_ip ? 1 : 0
+
   name   = var.static_address_name
   region = var.region
 
@@ -79,15 +92,17 @@ resource "google_compute_address" "static_ip" {
 # 3. Firewall
 # ------------------------------------------------------------
 # Exposure policy:
-#   - 80/443  public: the only thing that has to be reachable from the internet,
-#             and it is served by Nginx Proxy Manager.
+#   - 80/443  public ONLY when enable_public_ip = true. It is served by Nginx
+#             Proxy Manager. In the default free profile this rule does not
+#             exist and the web stack is reached through IAP.
 #   - 22      restricted to the IAP range (35.235.240.0/20).
-#   - 81/3000/9090/21680 (NPM admin, Grafana, Prometheus, demo app) are NOT
-#             opened to the world. They are reached through an SSH tunnel over
-#             IAP:
+#   - 81/3000/9090/21680 (NPM admin, Grafana, Prometheus, demo app) are never
+#             opened. They are reached through an SSH tunnel over IAP:
 #     gcloud compute ssh <instance> --tunnel-through-iap --zone <zone> \
 #       -L 3000:localhost:3000
 resource "google_compute_firewall" "allow_web" {
+  count = var.enable_public_ip ? 1 : 0
+
   name        = "${var.network_name}-allow-web"
   description = "Public HTTP/HTTPS served by Nginx Proxy Manager."
   network     = google_compute_network.vpc.id
@@ -133,6 +148,11 @@ locals {
   ssh_public_key = var.ssh_public_key != null ? var.ssh_public_key : try(
     trimspace(file(pathexpand(var.ssh_public_key_path))), ""
   )
+
+  # One flag for "the VM can reach the internet". A public demo needs it too,
+  # so enable_public_ip implies it. It does not imply the reverse: the egress
+  # window attaches an address without opening a single inbound port.
+  has_external_ip = var.enable_public_ip || var.enable_egress
 }
 
 check "ssh_public_key_present" {
@@ -187,15 +207,32 @@ resource "google_compute_instance" "vm" {
     initialize_params {
       image = var.image
       size  = var.disk_size_gb
-      type  = "pd-balanced"
+      # pd-standard, not pd-balanced: see the variable's comment in
+      # variables.tf for the io-wait measurement that justifies it.
+      type = var.boot_disk_type
     }
   }
 
   network_interface {
     subnetwork = google_compute_subnetwork.subnet.id
 
-    access_config {
-      nat_ip = google_compute_address.static_ip.address
+    # No access_config means no external IP. That is the default free profile:
+    # IAP can still forward SSH and TCP to a private instance, so nothing is
+    # lost except public reachability. The dynamic block keeps the resource
+    # valid for the three profiles:
+    #
+    #   free tier      no address at all, IAP only
+    #   egress window  ephemeral address, so apt/docker can download, but the
+    #                  firewall still opens nothing inbound
+    #   public demo    the reserved static address + the 80/443 rule
+    dynamic "access_config" {
+      for_each = local.has_external_ip ? [1] : []
+
+      content {
+        # null lets GCP assign an ephemeral address that disappears when the
+        # window closes. The static one is only for the public demo.
+        nat_ip = var.enable_public_ip ? google_compute_address.static_ip[0].address : null
+      }
     }
   }
 
@@ -203,6 +240,10 @@ resource "google_compute_instance" "vm" {
   # From there on, Ansible owns the instance.
   metadata = {
     ssh-keys = "${var.ssh_user}:${local.ssh_public_key}"
+    # Hardening (CKV_GCP_32): never fall back to project-wide SSH keys. The
+    # instance is reachable only through IAP anyway, and the key below is the
+    # sole bootstrap credential.
+    block-project-ssh-keys = true
   }
 
   service_account {
@@ -262,9 +303,11 @@ resource "google_compute_instance" "vm" {
 # Two independent layers, because they cover different failures:
 #
 #   1. Database backups in Cloud Storage. Small, fast, restorable in minutes.
-#      Covers data corruption and accidental deletion.
+#      Covers data corruption and accidental deletion. This layer fits in the
+#      Always Free Cloud Storage allowance (5 GB-months, same region).
 #   2. Disk snapshots. Everything, including Docker volumes and /etc. Covers
-#      the failure where the instance itself is unrecoverable.
+#      the failure where the instance itself is unrecoverable. Snapshots are
+#      NOT included in the free tier, so they are opt-in (enable_snapshots).
 # ============================================================
 
 resource "google_storage_bucket" "backups" {
@@ -275,6 +318,9 @@ resource "google_storage_bucket" "backups" {
   project                     = var.project_id
   force_destroy               = true
   uniform_bucket_level_access = true
+  # Hardening (CKV_GCP_114): the backups are never public, and the instance only
+  # gets objectCreator. Making the refusal explicit instead of relying on IAM.
+  public_access_prevention = "enforced"
 
   labels = var.labels
 
@@ -336,6 +382,9 @@ resource "google_storage_bucket_iam_member" "backups_writer" {
 # snapshot schedules became one instance of a wider concept. Following the old
 # name fails validation with "provider does not support resource type".
 
+# Opt-in because snapshot storage is billed (roughly $0.026/GB-month on
+# standard snapshots) and is outside the Always Free tier. The database backup
+# path above remains free and enabled regardless.
 resource "google_compute_resource_policy" "daily_snapshot" {
   count = var.enable_snapshots ? 1 : 0
 

@@ -1,51 +1,87 @@
 # ============================================================
 # Copy this file to terraform.tfvars and adjust the values.
-# terraform.tfvars is gitignored because it can hold real values.
+# terraform.tfvars is gitignored because it holds real values.
 #
 #   cp terraform.tfvars.example terraform.tfvars
+#
+# Perfil por defecto: Always Free de verdad (e2-micro, 30 GB pd-standard,
+# sin IP pública y sin snapshots). Todo se accede por túneles IAP, que son
+# gratuitos. Ver docs/FREE-TIER.md.
 # ============================================================
 
-project_id = "devops-lab-orlando"
-region     = "us-central1"
-zone       = "us-central1-a"
+# Tu proyecto NUEVO de GCP. El ID es único en todo Google Cloud.
+project_id = "tu-proyecto-nuevo"
+
+# La cuota Always Free de e2-micro solo existe en estas tres regiones.
+region = "us-central1"
+zone   = "us-central1-a"
 
 network_name = "vpc-devops-lab"
 subnet_name  = "subnet-devops"
 subnet_cidr  = "10.0.1.0/24"
 
-# Only HTTP/HTTPS are reachable from the internet.
+# ---------- Exposición de red ----------
+# false = perfil gratuito: la VM no tiene IP externa y no hay puertos abiertos
+#         a Internet. SSH, web, Grafana, Prometheus y NPM admin se alcanzan con
+#         túneles IAP (gcloud compute ssh --tunnel-through-iap -L ...).
+# true  = demo público en 80/443. Google cobra la IP externa (~$3.65/mes) y el
+#         egress que supere 1 GB/mes. Úsalo solo si el acceso público lo vale.
+enable_public_ip = false
+
+# Ventana de despliegue. Sin IP externa (y sin Cloud NAT, que se factura) la VM
+# no puede descargar paquetes ni imágenes: un `apt install` o un `docker pull`
+# falla. Ponlo a true antes del primer despliegue o de subir versiones, y a
+# false al terminar. No abre ningún puerto entrante.
+#   terraform apply -var='enable_egress=true'
+#   ... desplegar ...
+#   terraform apply -var='enable_egress=false'
+# Always Free incluye 1 hora de IP externa al mes: una ventana típica cuesta
+# 0,00-0,02 USD. Dejarlo en true 24/7 cuesta ~$3.65/mes.
+enable_egress = false
+
+# Solo se usan si enable_public_ip = true.
 web_source_ranges = ["0.0.0.0/0"]
 
-# SSH is reachable only from Google's IAP range, so the instance has
-# no public SSH surface at all:
+# SSH siempre restringido al rango de Identity-Aware Proxy.
 #   gcloud compute ssh instancia-devops-gcp --tunnel-through-iap --zone us-central1-a
 ssh_source_ranges = ["35.235.240.0/20"]
 
+# ---------- Instancia ----------
 instance_name = "instancia-devops-gcp"
-machine_type  = "e2-micro"
-image         = "ubuntu-os-cloud/ubuntu-2404-lts"
-disk_size_gb  = 30
+# Único tipo incluido en Always Free. La validación de variables lo exige.
+machine_type = "e2-micro"
+# Cambiar de familia fuerza el reemplazo del disco de arranque.
+image = "ubuntu-os-cloud/ubuntu-2204-lts"
+# pd-standard es el único disco incluido en Always Free. No cambiar.
+boot_disk_type = "pd-standard"
+disk_size_gb   = 30
 
-# Turn on once the organisation policy has been verified to allow it.
+# Shielded VM: actívalo solo si la política de la organización lo permite.
 enable_shielded_vm = false
 
-# Keep enabled to avoid destroying the instance with a typo.
+# VPC Flow Logs se facturan por GiB y no entran en Always Free.
+enable_vpc_flow_logs = false
+
+# Evita destruir la instancia con un typo.
 deletion_protection = true
 
-# Bootstrap access for Ansible.
-ssh_user             = "ubuntu"
-ssh_public_key_path  = "~/.ssh/id_deploy_gcp.pub"
+# Bootstrap de acceso para Ansible.
+ssh_user            = "ubuntu"
+ssh_public_key_path = "~/.ssh/id_deploy_gcp.pub"
+
 # ---------- Disaster recovery ----------
-# Bucket for off-site database backups. Leave empty to disable off-site backup
-# (the local copy stays on the same disk, which is not disaster recovery).
+# Bucket para backups de la base de datos NPM. Déjalo vacío para desactivar la
+# copia off-site (la copia local no es disaster recovery: vive en el mismo
+# disco). Los nombres de bucket son globales; añade un sufijo único.
 #
-# Bucket names are global and must be unique across all of Google Cloud, so
-# append something personal.
-backup_bucket_name = "devops-lab-orlando-backups-TUSUFIJO"
-backup_bucket_location = "us-central1"
+# Cloud Storage Always Free: 5 GB-meses regionales en us-central1, us-west1 o
+# us-east1. El bucket debe estar en la misma región que la VM.
+backup_bucket_name           = ""
+backup_bucket_location       = "us-central1"
 backup_bucket_retention_days = 7
 
-# Scheduled boot disk snapshots, which cover everything the database backup does
-# not: Docker volumes, /etc, the Ansible-managed configuration.
+# Snapshots de disco: NO están incluidos en Always Free. Déjalo en false para
+# un laboratorio estrictamente a coste cero; actívalo si necesitas recuperar la
+# instancia completa (coste típico ~$1/mes con 7 días de retención).
+enable_snapshots        = false
 snapshot_retention_days = 7
-enable_snapshots = true
