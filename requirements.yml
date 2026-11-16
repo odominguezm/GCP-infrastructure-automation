@@ -6,11 +6,9 @@
 # the module this project uses. Going higher is optional; going lower breaks the
 # deployment with a not-very-descriptive "module not found".
 #
-# IMPORTANT: community.docker 5.x requires ansible-core >= 2.17. On
-# ansible-core 2.16, pin community.docker to ">=3.4.0,<5.0.0". The CI workflow
-# installs ansible-core >= 2.16 and resolves to the latest 2.x, where the range
-# above applies. To stop the local environment and CI from diverging, the
-# ansible-core version is pinned explicitly in the workflow.
+# IMPORTANT: community.docker 5.x requires ansible-core >= 2.17. The CI workflow
+# (`.github/workflows/main.yml`) installs `ansible-core>=2.17,<2.20`; keep this
+# comment in sync with that pin instead of assuming the local environment.
 
 collections:
   # Module used: community.docker.docker_compose_v2

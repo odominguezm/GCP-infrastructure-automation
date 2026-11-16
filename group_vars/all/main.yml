@@ -29,20 +29,28 @@ compose_stacks:
   - name: app
     description: Demo app (nginx) published through Nginx Proxy Manager
     sync:
-      - { src: app/docker-compose.yml, dest: docker-compose.yml }
-      - { src: app/html/, dest: html/ }
+      - {src: app/docker-compose.yml, dest: docker-compose.yml}
+      - {src: app/html/, dest: html/}
 
   - name: proxy
     description: Nginx Proxy Manager - reverse proxy and TLS certificates
     sync:
-      - { src: proxy/docker-compose.yml, dest: docker-compose.yml }
+      - {src: proxy/docker-compose.yml, dest: docker-compose.yml}
 
   - name: monitoring
-    description: Prometheus, node-exporter, cAdvisor, Alertmanager and Grafana
+    description: Prometheus, node-exporter, Alertmanager and Grafana (no cAdvisor, ver abajo)
+    # When a synced definition of this stack changes, only these services are
+    # forced-recreated (see the fingerprint block in tasks/stacks.yml). They are
+    # the config-file consumers whose containers otherwise keep serving the
+    # previous version of a bind-mounted file. Grafana is deliberately left out:
+    # it reads its provisioning/dashboards at boot and a forced recreate costs a
+    # ~20-minute restart, so dashboard-only changes stay a documented manual
+    # `docker compose up -d --no-deps --force-recreate grafana`.
+    recreate_services: [prometheus, alertmanager]
     sync:
-      - { src: monitoring/docker-compose.yml, dest: docker-compose.yml }
-      - { src: monitoring/prometheus/prometheus.yml, dest: prometheus/prometheus.yml }
-      - { src: monitoring/prometheus/alerts.yml, dest: prometheus/alerts.yml }
+      - {src: monitoring/docker-compose.yml, dest: docker-compose.yml}
+      - {src: monitoring/prometheus/prometheus.yml, dest: prometheus/prometheus.yml}
+      - {src: monitoring/prometheus/alerts.yml, dest: prometheus/alerts.yml}
       # Rendered from the template, not copied: see tasks/stacks.yml. The
       # destination has no .j2 because that is the file Alertmanager reads.
       #
@@ -57,11 +65,11 @@ compose_stacks:
         template: true
         owner: "65534"
         group: "65534"
-      - { src: monitoring/grafana/provisioning/, dest: grafana/provisioning/ }
-      - { src: monitoring/grafana/dashboards/node-overview.json, dest: grafana/dashboards/node-overview.json }
+      - {src: monitoring/grafana/provisioning/, dest: grafana/provisioning/}
+      - {src: monitoring/grafana/dashboards/node-overview.json, dest: grafana/dashboards/node-overview.json}
       # The generator is copied too, so the dashboard can be rebuilt on the
       # server if the dashboard JSON ever needs to be regenerated.
-      - { src: monitoring/grafana/dashboards/build_dashboard.py, dest: grafana/dashboards/build_dashboard.py }
+      - {src: monitoring/grafana/dashboards/build_dashboard.py, dest: grafana/dashboards/build_dashboard.py}
 
 # ---------- Image versions ----------
 # Defined here rather than inline in the compose files so they can be bumped
@@ -71,6 +79,26 @@ compose_stacks:
 # Every tag below was checked against the upstream release feed rather than
 # guessed. Note that Grafana does not publish a floating "13.2" tag: the Docker
 # tag carries the full version, so release v13.2.3 is image 13.2.3.
+#
+# cAdvisor is DELIBERATELY NOT DEPLOYED, so its version is kept only so the
+# runbook of restoration has a pinned tag to use. Diagnosis (the reason the
+# exporter is gone, and the tension about the disk type, are open questions at
+# the bottom of `.sesion/RESUMEN-2026-10-04.md`):
+#
+#   The boot disk is pd-standard (network-attached, ~22-45 baseline IOPS on
+#   30 GB), and cAdvisor's job is to walk /sys/fs/cgroup and the Docker overlay
+#   continuously. That is pure metadata I/O, the worst fit for a networked disk:
+#   it sat permanently in uninterruptible sleep (D) while io-wait was measured
+#   >90% and load was sustained 9-11. node-exporter covers the host metrics that
+#   matter on 1 GB; cAdvisor's per-container granularity is not worth that cost.
+#
+#   Restoring it is a deliberate three-file change, not a half-toggle:
+#     1. Re-add the `cadvisor` service block in monitoring/docker-compose.yml.
+#     2. Re-add the `cadvisor:8080` scrape job in monitoring/prometheus/prometheus.yml.
+#     3. Re-add the `containers` alert group in monitoring/prometheus/alerts.yml.
+#   The three were removed together so that removing the exporter does not leave
+#   a dead scrape target (permanent TargetDown) or a permanent
+#   ContainerAbsentFromScrape false positive.
 prometheus_version: "v3.15.0"
 alertmanager_version: "v0.34.1"
 node_exporter_version: "v1.12.1"
@@ -88,18 +116,23 @@ prometheus_retention_size: "2GB"
 #   2. Local:         group_vars/all/local.yml (covered by .gitignore)
 #   3. Interactive:   ansible-playbook site.yml -e grafana_admin_password=...
 #
+# `grafana_admin_password` is deliberately NOT declared here, not even as null:
+# a null sentinel in main.yml would override the same key in local.yml during
+# the group_vars merge (files are read alphabetically, main.yml after local.yml)
+# and the deployment would always fail. Undefined, the choice is clean: the
+# secret exists only where it comes from.
+#
 # If it is left undefined, the deployment fails before touching anything. That
 # is preferable to bringing Grafana up with a well-known default password.
 grafana_admin_user: admin
-grafana_admin_password: null
 
 # ---------- Alerting ----------
-# null = alerts are evaluated and routed, but delivered to a receiver that drops
-# them. This is the default because a webhook URL is a credential: committing one
-# to a public repository leaks it and gets the repository rate-limited. Setting
-# this variable switches Alertmanager to a real Slack-compatible receiver with no
-# other change. See docs/runbooks/alerting.md.
-alertmanager_webhook_url: null
+# An undefined webhook means "evaluate, route and then drop the alert": the
+# template renders the `null` receiver. Set it (in local.yml or with --extra-vars)
+# to switch Alertmanager to a real Slack-compatible receiver with no other
+# change. See docs/runbooks/alerting.md.
+# Not declared here as null for the same reason as grafana_admin_password above:
+# a sentinel would clobber the local.yml override during the merge.
 
 # ---------- Backups ----------
 backup_path: "{{ deploy_path }}/backups"
@@ -109,9 +142,17 @@ backup_path: "{{ deploy_path }}/backups"
 backup_consistent: true
 backup_retention_days: 7
 # Cloud Storage bucket that receives a copy of every backup. Must match the
-# bucket created by Terraform (backup_bucket_name). Leave empty to keep backups
-# local only, which is not disaster recovery: the copy lives on the same disk as
-# the database.
+# bucket created by Terraform (backup_bucket_name). Empty means local backups
+# only, which is not disaster recovery: the copy lives on the same disk as the
+# database.
+#
+# Never hardcode a real bucket here. Inject it per environment instead:
+#   - GitHub Actions: repository variable BACKUP_BUCKET (main.yml passes it with
+#     --extra-vars).
+#   - Local/operator: group_vars/all/local.yml (gitignored) or
+#     `ansible-playbook site.yml -e backup_bucket=<nombre>`.
+# The Terraform output is the source of truth:
+#   terraform output -raw backup_bucket_name
 backup_bucket: ""
 
 # 03:00, outside the GCP maintenance window and before the server takes on
@@ -124,3 +165,44 @@ backup_user: "{{ deploy_user }}"
 ssh_hardening_enabled: true
 ssh_config_path: /etc/ssh/sshd_config.d/99-hardening.conf
 ssh_reload_command: /usr/sbin/sshd
+
+# Algorithm policy as YAML lists, joined with `join(',')` in the template.
+#
+# A folded scalar (`>-`) is the obvious way to wrap a long value and it does not
+# work here: folding joins the lines with a SPACE, and `sshd -t` rejects
+# `KexAlgorithms a, b` with "extra arguments at end of line" because sshd wants
+# the algorithms separated by commas and nothing else. A list joined explicitly
+# is both lint-clean and byte-exact.
+#
+# Ordering matters: the client's first preference that the server also supports
+# wins, so the post-quantum hybrid is offered first with the classical curve
+# second, and sntrup761x25519 is kept only because removing it breaks clients
+# that have not caught up.
+ssh_kex_algorithms:
+  - sntrup761x25519-sha512@openssh.com
+  - curve25519-sha256
+  - curve25519-sha256@libssh.org
+  - diffie-hellman-group-exchange-sha256
+ssh_ciphers:
+  - chacha20-poly1305@openssh.com
+  - aes256-gcm@openssh.com
+  - aes128-gcm@openssh.com
+ssh_macs:
+  - hmac-sha2-512-etm@openssh.com
+  - hmac-sha2-256-etm@openssh.com
+
+# ---------- Verification ----------
+# How long tasks/verify.yml waits for the containers to report healthy before
+# declaring the deployment broken.
+#
+# It has to be generous on this instance. During a deployment the box runs at
+# load 8 or more, and a healthcheck that times out three times in a row while the
+# CPU is saturated flips a perfectly healthy container to `unhealthy`. Reading the
+# verdict at a single instant turned that into seven false failures on a system
+# that was serving normally; every one of them recovered on its own within
+# minutes.
+#
+# 300 s is not an arbitrary number: it is six times the 30 s healthcheck
+# interval times the five retries configured in the compose files, so a container
+# only fails here after Docker itself has had a long opportunity to agree.
+verify_health_grace_seconds: 300

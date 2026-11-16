@@ -22,14 +22,68 @@
     group: "{{ deploy_user }}"
     mode: "0755"
 
+# The off-site copy uses gsutil. A stock Ubuntu image does not include it, so on
+# a fresh VM the upload would only log a warning and the "disaster recovery"
+# would silently be a file on the same disk. Installed only when a bucket is
+# configured: the strictly free profile (no bucket) must not pay the disk/RAM
+# cost of the CLI.
+- name: Install the Google Cloud CLI for off-site backups
+  when: backup_bucket | length > 0
+  block:
+    - name: Ensure the apt prerequisites for the Google repository
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - curl
+        state: present
+        update_cache: true
+
+    - name: Add the Google Cloud CLI signing key
+      ansible.builtin.get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /usr/share/keyrings/cloud.google.asc
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Add the Google Cloud CLI apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [signed-by=/usr/share/keyrings/cloud.google.asc]
+          https://packages.cloud.google.com/apt cloud-sdk main
+        filename: google-cloud-sdk
+        state: present
+        update_cache: true
+
+    - name: Install gsutil (google-cloud-cli)
+      ansible.builtin.apt:
+        name: google-cloud-cli
+        state: present
+
 - name: Run a test backup (validates the script during the deployment)
   ansible.builtin.command: "{{ deploy_path }}/backup_npm.sh"
+  become: true
   become_user: "{{ deploy_user }}"
   register: backup_test
   changed_when: true
   # The first deployment must fail if the backup does not work. A backup that
   # was never tested is not a backup, it is an assumption.
   failed_when: backup_test.rc != 0
+
+# The script deliberately downgrades an upload failure to a warning so a
+# temporary network problem does not break the cron job. That means a green
+# script is not proof that the object reached the bucket: check it here, where
+# the deployment can still fail and report it.
+- name: Confirm the off-site copy reached the bucket
+  when: backup_bucket | length > 0
+  ansible.builtin.command: "gsutil ls gs://{{ backup_bucket }}/npm/"
+  become: true
+  become_user: "{{ deploy_user }}"
+  register: offsite_check
+  changed_when: false
+  failed_when: offsite_check.rc != 0 or offsite_check.stdout | trim == ''
 
 - name: Schedule the daily backup
   ansible.builtin.cron:
@@ -45,6 +99,7 @@
   register: crontab_content
   changed_when: false
   failed_when: false
+  become: true
   become_user: "{{ backup_user }}"
   check_mode: false
 

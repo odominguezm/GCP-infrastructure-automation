@@ -6,7 +6,7 @@
 # play runs, that deletion propagates to the server and takes with it data that
 # is not in git: the Nginx Proxy Manager SQLite database, the Let's Encrypt
 # certificates, the Prometheus TSDB. Only the files declared explicitly in
-# group_vars/all.yml -> compose_stacks are synced.
+# group_vars/all/main.yml -> compose_stacks are synced.
 
 - name: Create the stack and backup directories
   ansible.builtin.file:
@@ -16,10 +16,10 @@
     group: "{{ deploy_user }}"
     mode: "0755"
   loop:
-    - { path: "{{ deploy_path }}/app", comment: "Demo app" }
-    - { path: "{{ deploy_path }}/proxy", comment: "Nginx Proxy Manager" }
-    - { path: "{{ deploy_path }}/monitoring", comment: "Observability" }
-    - { path: "{{ backup_path }}", comment: "Backups" }
+    - {path: "{{ deploy_path }}/app", comment: "Demo app"}
+    - {path: "{{ deploy_path }}/proxy", comment: "Nginx Proxy Manager"}
+    - {path: "{{ deploy_path }}/monitoring", comment: "Observability"}
+    - {path: "{{ backup_path }}", comment: "Backups"}
   loop_control:
     label: "{{ item.comment }} -> {{ item.path }}"
 
@@ -129,12 +129,64 @@
   loop: "{{ rendered_configs.results }}"
   loop_control:
     label: "{{ item.stat.path | default('?') }}"
-  when: item.skipped | default(false) | bool == false
+  when: not (item.skipped | default(false) | bool)
+
+# ------------------------------------------------------------------
+# Bind-mounted config files and the inode trap.
+#
+# `docker compose up` recreates a container when its compose definition or image
+# changes, but NOT when the content of a bind-mounted config file changes. And
+# Ansible's copy/template (like rsync) replace files by writing to a temp file
+# and renaming it, which points the container's mount at a dead inode: the
+# container keeps serving the previous version of the config forever. Prometheus
+# only picked up pruning its dead cAdvisor scrape target after an explicit
+# --force-recreate.
+#
+# The fingerprints below make that recreate explicit and automatic. Every
+# deploy hashes the synced definitions of each stack; when the hash differs from
+# the previous deploy, the corresponding stack is brought up with
+# `recreate: always` so the new config actually enters the running containers.
+# The first deploy after this feature is adopted deliberately does NOT recreate
+# (marker `first`): it avoids forcing a full --force-recreate of Grafana, with
+# its ~20-minute boot, on a stack that is already running the right definitions.
+# ------------------------------------------------------------------
+
+- name: Fingerprint this stack's synced definitions and detect a change
+  ansible.builtin.shell: >-
+    cd "{{ deploy_path }}/{{ item.name }}" &&
+    fp=$(find {{ item.sync | map(attribute='dest') | join(' ') }} -type f -print0 | sort -z | xargs -0 sha1sum | sha1sum | cut -d' ' -f1) &&
+    mkdir -p "{{ deploy_path }}/.stack_fingerprints" &&
+    marker="{{ deploy_path }}/.stack_fingerprints/{{ item.name }}.sha1" &&
+    echo "$fp" > "$marker" &&
+    if [ ! -f "$marker.prev" ]; then echo first; elif ! cmp -s "$marker.prev" "$marker"; then echo changed; else echo same; fi &&
+    cp "$marker" "$marker.prev"
+  loop: "{{ compose_stacks }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: stack_fingerprints
+  changed_when: false
+
+- name: Decide which stacks need a forced recreate
+  ansible.builtin.set_fact:
+    stack_recreate: >-
+      {{ stack_recreate | default({})
+         | combine({item.item.name: (item.stdout == 'changed')}) }}
+  loop: "{{ stack_fingerprints.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
 
 - name: Bring up the container stacks
   community.docker.docker_compose_v2:
     project_src: "{{ deploy_path }}/{{ item.name }}/"
     state: present
+    # When definitions changed we recreate only the config consumers
+    # (item.recreate_services, e.g. prometheus+alertmanager); everything else in
+    # the stack is left alone, so a slow container like Grafana is never forced
+    # down just because a dashboard changed. Without a change the whole stack is
+    # managed normally (recreate auto, no service constraint).
+    services: >-
+      {{ item.recreate_services | default([])
+         if stack_recreate[item.name] else omit }}
     # `wait: true` makes the play fail if a container does not start, instead of
     # carrying on and reporting success with a stack that is down.
     wait: true
@@ -145,19 +197,42 @@
     # slow boot into a red pipeline -- which is what happened at 180s.
     # This is the single slowest step of the deployment; the play is not hung.
     wait_timeout: 1800
-    # `always`, not `true`: from community.docker 3.x the module validates this
-    # against the Compose file schema, which accepts only
-    # always|missing|never|policy, and a boolean aborts the play with
-    # "value of pull must be one of ...". `always` is the equivalent of
-    # `docker compose pull` before `up`, which is what the deployments want:
-    # the tags are pinned in .env, so re-fetching them keeps the running stack
-    # matching what version control declares even if the local cache drifted.
-    pull: always
+    # `missing`, not `always`.
+    #
+    # `always` re-fetches every image from the registry on every single
+    # deployment, which on this instance makes the whole play depend on
+    # Docker Hub being reachable while the box is saturated. It failed exactly
+    # that way: at load 9 the TLS handshake to auth.docker.io timed out and the
+    # deployment aborted on
+    #   failed to fetch anonymous token ... TLS handshake timeout
+    # with the stack itself perfectly fine and the images already on disk.
+    #
+    # `missing` pulls only what is not present locally. The tags are pinned in
+    # .env, so bumping a version still pulls the new image, because the new tag
+    # is not in the local cache. What is given up is detecting a tag that was
+    # re-pushed upstream with different content, which is a supply-chain nicety
+    # not worth a deployment that fails on a registry timeout.
+    # `auto` (the Docker default) recreates only containers whose definition or
+    # image changed; `always` additionally forces the containers whose bind-
+    # mounted config files changed since the previous deploy (see the
+    # fingerprint block above). Recreating everything on every deploy is what
+    # this comment is arguing against -- so both the recreate and the stack
+    # boot timeout below exist under the same constraint.
+    recreate: "{{ 'always' if stack_recreate[item.name] else 'auto' }}"
+    pull: missing
     remove_orphans: true
   loop: "{{ compose_stacks }}"
   loop_control:
     label: "{{ item.name }} ({{ item.description }})"
   register: compose_deploy
+  # A saturated e2-micro makes the occasional registry or DNS hiccup look like a
+  # broken deployment. Two attempts, a minute apart, separates a transient
+  # network failure from a real one: the compose wait is 1800s, so one extra
+  # retry costs nothing when the stack is fine, and the second failure still
+  # fails the play rather than looping.
+  retries: 2
+  delay: 60
+  until: compose_deploy is succeeded
 
 - name: Show the deployment summary
   ansible.builtin.debug:
@@ -168,6 +243,10 @@
   loop_control:
     label: "{{ item.item.name }}"
   when: item.changed | default(false)
+  # noqa: no-handler - a handler would run at the end of the play, which is
+  # exactly wrong here: the point is to show the compose output while the
+  # operator is still reading the deployment log, next to the task that
+  # produced it.
 
 # Belt and braces for the loop above: `docker_compose_v2` already fails its own
 # task when `wait: true` times out, so reaching this point normally means every

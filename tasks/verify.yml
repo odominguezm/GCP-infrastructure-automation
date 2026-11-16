@@ -48,7 +48,6 @@
     - grafana
     - node-exporter
     - alertmanager
-    - cadvisor
     - demo-app
   loop_control:
     loop_var: expected_container
@@ -67,19 +66,54 @@
 # "health: starting" is deliberately NOT a failure: Grafana needs ~20 minutes to
 # become ready on this instance and failing the deployment while its own
 # start_period is still counting would be wrong.
+#
+# The verdict is polled rather than read once. Docker needs `retries`
+# consecutive failures to report unhealthy, but on this instance the box runs at
+# load 8 during a deployment (Ansible, the compose recreates and the six
+# containers all at once), and under that load a healthcheck times out often
+# enough to trip three failures in a row. Reading the state at one instant
+# therefore produced seven false failures on a completely healthy system, all of
+# which recovered on their own within minutes. Waiting up to five minutes for
+# the stack to settle separates "this deployment is broken" from "this e2-micro
+# was briefly too busy to answer a health probe".
+- name: Wait for every container to report healthy
+  ansible.builtin.shell:
+    # /bin/sh on Ubuntu is dash, which does not know `set -o pipefail` (it answers
+    # "set: Illegal option" and the whole task errors with rc=2 on a healthy
+    # system -- which is exactly how this task used to fail every deployment the
+    # moment the box was briefly busy). Executing in bash makes pipefail mean what
+    # it says.
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      docker ps --filter status=running --format '{{ "{{.Names}}" }} {{ "{{.Status}}" }}' \
+        | awk '$NF == "(unhealthy)" { print; bad = 1 } END { exit bad }'
+  register: unhealthy_containers
+  changed_when: false
+  check_mode: false
+  retries: "{{ (verify_health_grace_seconds | int) // 30 }}"
+  delay: 30
+  until: unhealthy_containers.rc == 0
+  failed_when: false
+  become_user: "{{ deploy_user }}"
+
+- name: Report how long the containers took to settle
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'all containers healthy' if unhealthy_containers.rc == 0
+         else 'still unhealthy after waiting: ' ~ verify_health_grace_seconds ~ 's' }}
+
 - name: Check that no container reports an unhealthy state
   ansible.builtin.assert:
     that:
-      - "'(unhealthy)' not in item"
+      - unhealthy_containers.rc == 0
     fail_msg: >-
-      {{ item.split()[0] }} is unhealthy on {{ inventory_hostname }}. Inspect it
-      with `docker inspect --format '{{ '{{' }}.State.Health.Log{{ '}}' }}' <container>`
-      and `docker logs <container>`. Current state:
-      {{ running_containers.stdout_lines }}
+      These containers are still reporting unhealthy after waiting
+      {{ verify_health_grace_seconds }}s, and a busy instance has already been
+      ruled out: {{ unhealthy_containers.stdout_lines }}
+      Inspect with `docker inspect --format '{{ '{{' }}.State.Health.Log{{ '}}' }}' <container>`
+      and `docker logs <container>`.
     quiet: true
-  loop: "{{ running_containers.stdout_lines }}"
-  loop_control:
-    label: "{{ item }}"
 
 - name: Check swap usage (signal of memory pressure)
   ansible.builtin.command: swapon --show=NAME,USED,PRIO --noheadings

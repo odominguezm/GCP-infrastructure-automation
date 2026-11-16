@@ -144,6 +144,7 @@
 - name: Check access to the Docker daemon
   ansible.builtin.command:
     cmd: "docker info --format '{{ '{{' }}.ServerVersion{{ '}}' }}'"
+  become: true
   become_user: "{{ deploy_user }}"
   register: docker_info
   changed_when: false

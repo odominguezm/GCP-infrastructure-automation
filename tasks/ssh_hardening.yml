@@ -61,9 +61,13 @@
           PermitRootLogin no
 
           # --- Algorithm selection ---
-          KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
-          Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
-          MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+          # The lists live in group_vars/all/main.yml and are joined with ',' rather
+          # than written inline. `content: |` is a literal block, so a value
+          # broken across two source lines would put a newline in the middle of
+          # an sshd_config directive, and sshd_config has no line continuation.
+          KexAlgorithms {{ ssh_kex_algorithms | join(',') }}
+          Ciphers {{ ssh_ciphers | join(',') }}
+          MACs {{ ssh_macs | join(',') }}
 
           # --- Session ---
           # Bounds brute force and idle hung connections.
