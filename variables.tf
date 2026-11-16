@@ -73,55 +73,22 @@ variable "subnet_cidr" {
   }
 }
 
-variable "static_address_name" {
-  type        = string
-  description = "Name of the reserved static public IP resource. Only used when enable_public_ip = true."
-  default     = "devops-lab-ip"
-}
-
-# ---------- Network exposure ----------
-variable "enable_public_ip" {
-  type        = bool
-  description = <<-EOT
-    Give the VM an external IP and open 80/443 to the internet.
-
-    Default false: the Always Free tier covers the VM, its 30 GB standard disk
-    and 1 GB/month of egress, but it does NOT cover external IP addresses.
-    Google charges $0.005/hour (~$3.65/month) for a static or ephemeral IP in
-    use on a standard VM, with only one free hour per month per account.
-
-    With false, every administrative and web port is reached through an IAP
-    tunnel (also free), and the deployment stays at $0.00 in Compute Engine.
-    Set true only if a publicly reachable demo is worth the hourly address cost.
-  EOT
-  default     = false
-}
-
 variable "enable_egress" {
   type        = bool
   description = <<-EOT
     Attach an ephemeral external IP so the instance can reach the internet.
 
-    This is NOT the same as enable_public_ip: it opens no inbound port, it only
-    gives the VM a way out. Without an external IP (or Cloud NAT, which is
-    billed hourly) a VM cannot reach apt mirrors, the Docker registry or
-    packages.cloud.google.com, so a deployment cannot install anything.
+    This opens no inbound port. It exists because a VM without an external IP
+    (or Cloud NAT, which is billed hourly) cannot reach apt mirrors, the Docker
+    registry or packages.cloud.google.com, so a deployment cannot install
+    anything.
 
-    It exists because the first Ansible run needs egress even in the free
-    profile. Turn it on before deploying and off afterwards: the Always Free
-    tier includes one hour of external IP per account per month, so a deploy
-    window costs 0.00 to a few cents. Leaving it on costs $0.005/hour
-    (~$3.65/month).
-
-    enable_public_ip = true implies this, so it does not need to be set too.
+    Turn it on before deploying and off afterwards. The Always Free tier
+    includes one hour of external IP per account per month, so a normal deploy
+    window costs 0.00 to a few cents. Leaving it on 24/7 costs
+    $0.005/hour (~$3.65/month).
   EOT
   default     = false
-}
-
-variable "web_source_ranges" {
-  type        = list(string)
-  description = "Source ranges allowed to reach ports 80/443. Only used when enable_public_ip = true."
-  default     = ["0.0.0.0/0"]
 }
 
 variable "ssh_source_ranges" {
@@ -195,25 +162,6 @@ variable "disk_size_gb" {
     condition     = var.disk_size_gb >= 10 && var.disk_size_gb <= 30
     error_message = "disk_size_gb must be between 10 and 30 to stay on the free tier."
   }
-}
-
-variable "enable_vpc_flow_logs" {
-  type        = bool
-  description = <<-EOT
-    Enable VPC Flow Logs on the subnet.
-
-    Default false: flow logs are billed per GiB ($0.25/GiB up to 10,240 GiB) and
-    are not covered by the Always Free tier. On a lab with almost no traffic the
-    monthly cost is negligible, but it is not zero. Set true when the audit
-    trail is worth more than the line item.
-  EOT
-  default     = false
-}
-
-variable "enable_shielded_vm" {
-  type        = bool
-  description = "Enables vTPM, Secure Boot and integrity monitoring. Requires the organisation policy to allow it."
-  default     = false
 }
 
 variable "deletion_protection" {
@@ -309,33 +257,4 @@ variable "backup_bucket_retention_days" {
     condition     = var.backup_bucket_retention_days >= 7
     error_message = "backup_bucket_retention_days below 7 would delete backups before the local retention window."
   }
-}
-
-variable "snapshot_retention_days" {
-  type        = number
-  description = <<-EOT
-    Days to keep scheduled disk snapshots. Only used when enable_snapshots is
-    true. Snapshots cover the whole instance, including Docker volumes.
-  EOT
-  default     = 7
-
-  validation {
-    condition     = var.snapshot_retention_days >= 1 && var.snapshot_retention_days <= 7
-    error_message = "snapshot_retention_days must be between 1 and 7 to bound snapshot storage cost."
-  }
-}
-
-variable "enable_snapshots" {
-  type        = bool
-  description = <<-EOT
-    Scheduled disk snapshots.
-
-    Default false: snapshots are NOT part of the Compute Engine Always Free
-    tier. A 30 GB boot disk with 7 daily incremental snapshots typically costs
-    around $1/month, and that line item grows with retention. Keep it false for
-    a strictly $0.00 lab; set it true when full-instance recovery is worth the
-    small monthly charge. Off-site database backups in Cloud Storage remain
-    free and enabled independently.
-  EOT
-  default     = false
 }
