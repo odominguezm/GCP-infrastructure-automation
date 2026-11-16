@@ -2,9 +2,8 @@
 # ============================================================
 # Demo app: nginx serving static content.
 #
-# This is the sample workload that Nginx Proxy Manager publishes. With
-# enable_public_ip = true that is HTTPS on the public IP; in the default free
-# profile NPM is reached through an IAP tunnel and public TLS is not issued.
+# This is the sample workload that Nginx Proxy Manager publishes. NPM is
+# reached through an IAP tunnel; there is no public ingress in the free profile.
 # ============================================================
 
 x-logging: &default-logging
@@ -20,8 +19,7 @@ services:
     restart: unless-stopped
     ports:
       # Bound to 127.0.0.1 on purpose: the demo is never published directly.
-      # Nginx Proxy Manager is the ingress path (HTTPS with enable_public_ip,
-      # or an IAP tunnel to NPM's port 80 in the free profile).
+      # Nginx Proxy Manager is the ingress path, reached through an IAP tunnel.
       - "127.0.0.1:21680:80"
     volumes:
       # Static content. If this volume were read-write, a compromised container

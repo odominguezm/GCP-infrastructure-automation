@@ -41,8 +41,7 @@ gcloud compute ssh "$INSTANCE" --project "$PROJECT" --zone "$ZONE" \
 In the default profile there are no ports open to the internet at all: Nginx
 Proxy Manager (80/443), its admin panel (81), Grafana (3000), Prometheus (9090),
 Alertmanager (9093) and the demo app (21680) are all reached through an IAP
-tunnel. With `enable_public_ip = true`, only 80/443 become reachable from the
-internet.
+tunnel. Open one with `-L <local>:localhost:<remote>` as shown above.
 
 If you change `ssh_source_ranges`, re-check the rule before assuming you are
 locked out:
@@ -58,17 +57,17 @@ gcloud compute firewall-rules describe vpc-devops-lab-allow-ssh-iap \
 |---|---|---|
 | **RPO** (how much data can be lost) | 24 h | Nginx Proxy Manager database |
 | **RTO** (how long until it is back) | ~30 min | Nginx Proxy Manager database |
-| **RPO** | 24 h | Whole instance (only with `enable_snapshots = true`) |
+| **RPO** | 24 h | Whole instance (database plus configuration as code) |
 | **RTO** | ~45 min | Whole instance |
 
 The database RPO is 24 h because the backup runs once a day at 03:00. A change
 made at 16:00 is not protected until the next morning. Raising it means more
 frequent backups, which on this instance is a decision about the memory budget.
 
-Whole-instance objectives only apply when scheduled snapshots are enabled. They
-are **off by default** because snapshot storage is not part of the Always Free
-tier (see [`../FREE-TIER.md`](../FREE-TIER.md)). Without them, path B rebuilds
-from Terraform + Ansible and restores the database from Cloud Storage.
+There are no disk snapshots: they are not part of the Always Free tier (see
+[`../FREE-TIER.md`](../FREE-TIER.md)). Whole-instance recovery is path B:
+Terraform + Ansible rebuild the machine, and the database is restored from
+Cloud Storage.
 
 ## Which path do I need?
 
@@ -81,14 +80,14 @@ from Terraform + Ansible and restores the database from Cloud Storage.
 ## Inventory
 
 ```bash
-# Off-site database backups (skip if BUCKET is empty)
+# Off-site database backups (skip if BUCKET is empty). This must run on the
+# operator machine: the instance service account can only CREATE objects and
+# cannot list or read them.
 gcloud storage ls -l "gs://$BUCKET/npm/"
 
-# Snapshots of the boot disk (empty unless enable_snapshots = true)
-gcloud compute snapshots list --project "$PROJECT"
-
 # Local copies still on the instance
-ls -lh ~/backups/
+gcloud compute ssh "$INSTANCE" --project "$PROJECT" --zone "$ZONE" \
+  --tunnel-through-iap --command 'ls -lh ~/backups/'
 ```
 
 `BUCKET` is the value of `backup_bucket_name` in `terraform.tfvars`, or
@@ -133,30 +132,18 @@ A plan can still show "must be replaced" for the instance for two reasons:
 
 Do not "fix" a plan by running `terraform apply` to see what happens.
 
-### Optional resources are decoupled on purpose
+### The bucket IAM grant is decoupled on purpose
 
-The snapshot schedule attachment and the bucket IAM grant reference
-`var.instance_name` and `google_service_account.backup` directly instead of
-reading values off `google_compute_instance.vm`. That keeps a forced instance
-replacement from dragging backups and snapshots into the same plan.
-
-When `enable_snapshots = true`, those resources can be applied with `-target`
-without touching the machine:
-
-```bash
-terraform apply \
-  -target='google_compute_resource_policy.daily_snapshot[0]' \
-  -target='google_compute_disk_resource_policy_attachment.snapshot_schedule[0]'
-```
-
-When `enable_snapshots = false`, those resources have `count = 0` and cannot be
-targeted: enable the variable first.
+The bucket IAM grant references `google_service_account.backup` directly instead
+of reading values off `google_compute_instance.vm`. That keeps a forced instance
+replacement from dragging the backup grant into the same plan.
 
 ## A. Restore the database
 
 ### 1. Choose the backup
 
 ```bash
+# Operator machine: the instance SA can create backup objects but not read them.
 gcloud storage ls -l "gs://$BUCKET/npm/"
 ```
 
@@ -164,20 +151,22 @@ Pick by timestamp. Object versioning is on, so a deleted or overwritten backup
 can be recovered for 7 days after deletion, which turns "I overwrote it" from a
 terminal event into a slow afternoon.
 
-If `BUCKET` is empty there is no off-site copy. Use the local backup:
+If `BUCKET` is empty there is no off-site copy. Log in through IAP and use the
+local backup:
 
 ```bash
-ls -lh ~/backups/
-# copy the chosen file to /tmp/restore.sqlite before continuing
+gcloud compute ssh "$INSTANCE" --project "$PROJECT" --zone "$ZONE" \
+  --tunnel-through-iap --command 'ls -lh ~/backups/'
+# Copy the chosen file to ~/restore.sqlite on the instance before continuing.
 ```
 
 ### 2. Verify it before touching anything
 
-A backup that has not been opened is not a backup. Download and check it
-without writing it anywhere near the live database:
+A backup that has not been opened is not a backup. Download it on the operator
+machine and check it without writing it anywhere near the live database:
 
 ```bash
-gsutil cp "gs://$BUCKET/npm/npm_db_20261003_030000.sqlite" /tmp/restore.sqlite
+gcloud storage cp "gs://$BUCKET/npm/npm_db_20261003_030000.sqlite" /tmp/restore.sqlite
 
 python3 - <<'PY'
 import sqlite3
@@ -189,6 +178,10 @@ print('proxies:  ', db.execute('SELECT count(*) FROM proxy_host').fetchone()[0])
 print('certificados:', db.execute('SELECT count(*) FROM certificate').fetchone()[0])
 db.close()
 PY
+
+# Send the verified copy to the instance over IAP.
+gcloud compute scp --tunnel-through-iap --project "$PROJECT" --zone "$ZONE" \
+  /tmp/restore.sqlite "$INSTANCE":~/restore.sqlite
 ```
 
 `integrity` must say `ok` and the counts must be plausible. A backup that passes
@@ -209,7 +202,7 @@ If the restore turns out to restore the wrong thing, this is the only way back.
 cd ~/proxy
 docker compose stop app
 rm -f data/database.sqlite data/database.sqlite-wal data/database.sqlite-shm
-cp /tmp/restore.sqlite data/database.sqlite
+cp ~/restore.sqlite data/database.sqlite
 chown 1000:1000 data/database.sqlite   # the UID NPM runs as
 docker compose up -d app
 docker compose logs -f app
@@ -234,32 +227,27 @@ hosts and certificates from the backup date must be there.
 
 For an unreachable VM, a corrupted disk, or a machine that has to be replaced.
 
-### 1. Snapshot first, always
+### 1. Save what can still be saved
 
-Even with scheduled snapshots disabled, take a manual one before touching the
-instance. It is billed per GB-month, but it is the only state you cannot
-recreate later. If you want to avoid the charge entirely, skip this step and
-accept that anything not in the database backup is lost.
-
-```bash
-gcloud compute instances snapshot "$INSTANCE" --project "$PROJECT" --zone "$ZONE"
-```
-
-### 2. Restore the disk from a snapshot (only if one exists)
+There are no scheduled snapshots in the free profile, so there is no disk image
+to fall back on. Before replacing the instance, copy anything that matters off
+the old disk while it is still reachable: the NPM database, `~/proxy/letsencrypt`
+and any file that is not in the repository.
 
 ```bash
-gcloud compute snapshots list --project "$PROJECT" \
-  --filter='name~devops-daily' --sort-by='~creationTimestamp' --limit=1
+gcloud compute ssh "$INSTANCE" --project "$PROJECT" --zone "$ZONE" \
+  --tunnel-through-iap --command \
+  'tar -C ~ -czf ~/rescue.tgz proxy/data proxy/letsencrypt 2>/dev/null || true; ls -lh ~/rescue.tgz'
 
-gcloud compute disks create "$INSTANCE-restored" \
-  --project "$PROJECT" --zone "$ZONE" \
-  --source-snapshot SNAPSHOT_NAME
+gcloud compute scp --tunnel-through-iap --project "$PROJECT" --zone "$ZONE" \
+  "$INSTANCE":~/rescue.tgz ./rescue-$(date +%Y%m%d).tgz
 ```
 
-With `enable_snapshots = false` (the default) this list is empty and there is
-nothing to restore from. Continue with step 3.
+If you need a disk image for a forensic investigation, a manual snapshot
+(`gcloud compute instances snapshot`) is billed per GB-month. It is a deliberate
+paid action, not part of the normal recovery path.
 
-### 3. Replace the instance
+### 2. Replace the instance
 
 ```bash
 cd ~/Developer/GitHub-Portafolio/GCP-infrastructure-automation
@@ -288,7 +276,7 @@ ansible-playbook site.yml
 # then restore the database from Cloud Storage, path A
 ```
 
-### 4. Rebuild from scratch, when there is no snapshot
+### 3. Rebuild from scratch
 
 The default free profile has no snapshots, so this is the normal rebuild path:
 
@@ -341,10 +329,16 @@ An untested backup is a hypothesis. The cheapest possible test, worth running
 once after the first deploy:
 
 ```bash
-# Take a backup, then restore it into /tmp and check it
-~/backup_npm.sh
-gsutil ls "gs://$BUCKET/npm/" | tail -1
-gsutil cp "gs://$BUCKET/npm/$(gsutil ls "gs://$BUCKET/npm/" | tail -1 | xargs basename)" /tmp/check.sqlite
+# 1. Take a backup on the instance.
+gcloud compute ssh "$INSTANCE" --project "$PROJECT" --zone "$ZONE" \
+  --tunnel-through-iap --command '~/backup_npm.sh'
+
+# 2. From the operator machine, list the objects (the instance SA cannot read
+#    them) and download the newest one.
+LATEST="$(gcloud storage ls "gs://$BUCKET/npm/" | sort | tail -1)"
+gcloud storage cp "$LATEST" /tmp/check.sqlite
+
+# 3. Open it: a backup that has never been opened is not a backup.
 python3 -c "import sqlite3; print(sqlite3.connect('/tmp/check.sqlite').execute('PRAGMA integrity_check').fetchone()[0])"
 ```
 

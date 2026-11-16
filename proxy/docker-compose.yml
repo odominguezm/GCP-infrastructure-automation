@@ -3,14 +3,13 @@
 # Nginx Proxy Manager: reverse proxy + automatic TLS certificates
 #
 # Exposure:
-#   80  and 443  published on the host. In the default free profile the VM has
-#                no external IP and there is no allow_web firewall rule, so they
-#                are reached through an IAP tunnel:
+#   80  and 443  published on the host. The VM has no external IP and there is
+#                no allow-web firewall rule, so they are reached through an IAP
+#                tunnel:
 #                  gcloud compute ssh <instance> --tunnel-through-iap \
 #                    -L 8080:localhost:80
-#                With enable_public_ip = true they become the only project ports
-#                reachable from the internet. The admin panel (81) is bound to
-#                127.0.0.1 and is never published.
+#                The admin panel (81) is bound to 127.0.0.1 and is never
+#                published.
 # ============================================================
 
 x-logging: &default-logging

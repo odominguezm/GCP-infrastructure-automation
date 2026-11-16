@@ -5,10 +5,11 @@ para el **Always Free Tier real**: una instancia `e2-micro` (1 GB de RAM, 30 GB
 de disco `pd-standard`) provisionada con **Terraform**, configurada con
 **Ansible** y validada por un pipeline de **GitHub Actions**.
 
-El perfil por defecto **no crea IP pública ni snapshots**: todo se accede por
-túneles IAP, que son gratuitos. Así el coste mensual es **0,00 USD**, no "casi
-gratis". Si quieres una demo pública en 80/443, `enable_public_ip = true` la
-habilita y la documentación explica el coste (≈ `$3,65/mes` por la IP).
+El perfil por defecto **no crea IP externa, ni snapshots, ni VPC Flow Logs**:
+todo se accede por túneles IAP, que son gratuitos. El coste mensual es **0,00
+USD**. La única excepción es una ventana temporal de salida a Internet
+(`enable_egress`) para que `apt` y `docker pull` funcionen durante el despliegue:
+no abre ningún puerto entrante y se cierra al terminar.
 
 El objetivo no es solo que funcione, sino que sea reproducible, observable y
 recuperable: firewalls mínimos, secretos fuera del repositorio, backups
@@ -22,104 +23,168 @@ verificados y un despliegue que falla si los servicios no quedan sanos.
 | Infraestructura | Terraform ≥ 1.9 (provider `hashicorp/google` 6.x) |
 | Configuración | Ansible (`site.yml` como entrada única) |
 | Contenedores | Docker Engine + Docker Compose v2 |
-| Proxy / TLS | Nginx Proxy Manager 2.16.0 (TLS público solo con `enable_public_ip`) |
+| Proxy / TLS | Nginx Proxy Manager 2.16.0 |
 | Observabilidad | Prometheus v3.15.0 · Grafana 13.2.3 · Alertmanager v0.34.1 · node-exporter v1.12.1 |
 | CI/CD | GitHub Actions (Workload Identity Federation + túnel IAP) |
-| Backups | SQLite backup API → GCS + snapshots diarios opcionales |
+| Backups | SQLite backup API → GCS (opcional) + retención local |
 | Acceso | IAP para SSH, web, Grafana, Prometheus y NPM admin |
 
-## 📚 Documentación
+## 🏗️ Arquitectura
 
-| Documento | Contenido |
-|---|---|
-| [`docs/FREE-TIER.md`](docs/FREE-TIER.md) | Qué cubre Always Free, qué cuesta y cómo desplegar a coste 0 |
-| [`docs/README.md`](docs/README.md) | Índice y orden de lectura |
-| [`docs/ESTRUCTURA.md`](docs/ESTRUCTURA.md) | Mapa de archivos, reglas y hallazgos de la revisión |
-| [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) | Diagramas, red, seguridad, memoria y decisiones |
-| [`docs/EJECUCION.md`](docs/EJECUCION.md) | Despliegue paso a paso desde cero |
-| [`docs/OPERACION.md`](docs/OPERACION.md) | Rutina, cambios y troubleshooting |
-| [`docs/PROMPT-NUEVA-SESION.md`](docs/PROMPT-NUEVA-SESION.md) | Traspaso listo para otra sesión |
-| [`docs/runbooks/alerting.md`](docs/runbooks/alerting.md) | Qué hacer ante cada alerta |
-| [`docs/runbooks/disaster-recovery.md`](docs/runbooks/disaster-recovery.md) | Restauración y reconstrucción |
+```mermaid
+flowchart LR
+    subgraph Internet
+        OP[Operador]
+        GH[GitHub Actions]
+    end
 
-## 🏗️ Arquitectura en una imagen
+    subgraph GCP["GCP · <TU_PROYECTO> · us-central1-a"]
+        FW["Firewall<br/>tcp:22 solo IAP"]
+        VM["VM e2-micro<br/>sin IP externa"]
 
-Perfil por defecto (coste 0,00 USD):
+        subgraph VMInt["Dentro de la VM"]
+            NPM["Nginx Proxy Manager<br/>:80/:443 · admin :81 loopback"]
+            APP["demo-app nginx<br/>127.0.0.1:21680"]
+            PROM["Prometheus<br/>127.0.0.1:9090"]
+            GRAF["Grafana<br/>127.0.0.1:3000"]
+            AM["Alertmanager<br/>127.0.0.1:9093"]
+            NE["node-exporter<br/>:9100 interno"]
+            BK["backup_npm.sh<br/>cron 03:00"]
+        end
 
-```text
-Operador / GitHub Actions
-        │  IAP (túnel SSH autenticado, gratuito)
-        ▼
-   VM e2-micro (sin IP externa)
-   ├── Nginx Proxy Manager :80/:443  ──▶ demo-app (nginx)
-   │        admin :81 loopback
-   ├── Prometheus :9090 loopback ──▶ node-exporter
-   ├── Grafana :3000 loopback
-   ├── Alertmanager :9093 loopback
-   └── backup_npm.sh ──▶ GCS (off-site, opcional)
+        BUCKET[("GCS<br/>backups npm/")]
+    end
+
+    OP -->|túnel IAP| FW --> VM
+    GH -->|WIF + túnel IAP| FW
+    OP -.->|"-L 8080:localhost:80"| NPM
+    PROM -->|scrape 15s| NE
+    PROM -->|alertas| AM
+    GRAF -->|query| PROM
+    BK -->|SQLite backup API| NPM
+    BK -->|gsutil| BUCKET
 ```
 
-Con `enable_public_ip = true` se añade una IP estática y la regla 80/443; es el
-único cambio de arquitectura y el único coste fijo.
-
+- **Tres capas separadas:** Terraform no configura servicios y Ansible no crea
+  infraestructura. El pipeline solo ejecuta Ansible.
 - **Público por defecto:** nada. Solo IAP.
-- **SSH:** solo desde el rango de Identity-Aware Proxy (`35.235.240.0/20`).
 - **Paneles admin** (NPM 81, Grafana 3000, Prometheus 9090, Alertmanager 9093)
   escuchan en `127.0.0.1` y se acceden por túnel IAP.
 - **Sin claves de servicio en disco:** la VM usa su service account; el pipeline
   usa WIF.
 
+### Exposición de red
+
+| Puerto | Origen permitido | Servicio | Cómo se accede |
+|---|---|---|---|
+| 22 | Solo `35.235.240.0/20` (IAP) | sshd | `gcloud compute ssh --tunnel-through-iap` |
+| 80, 443 | Solo túnel/loopback | NPM | Túnel IAP `-L 8080:localhost:80` |
+| 81 | Loopback | NPM admin | Túnel IAP `-L 8081:localhost:81` |
+| 3000 | Loopback | Grafana | Túnel IAP `-L 3000:localhost:3000` |
+| 9090 | Loopback | Prometheus | Túnel IAP `-L 9090:localhost:9090` |
+| 9093 | Loopback | Alertmanager | Túnel IAP `-L 9093:localhost:9093` |
+| 21680 | Loopback | Demo app | A través de NPM |
+| 9100 | Red interna de Compose | node-exporter | Solo lo scrapea Prometheus |
+
 ## ⚡ Quick start
+
+Requisitos: `gcloud`, Terraform ≥ 1.9, `ansible-core` ≥ 2.17, Python 3.10+,
+Docker (solo para validar los compose en local) y una clave ED25519 en
+`~/.ssh/id_deploy_gcp`.
 
 ```bash
 # 1. Configuración local (nunca commitear estos archivos)
-cp terraform.tfvars.example terraform.tfvars
-# edita project_id; deja enable_public_ip = false para coste 0
-cp .env.example .env
+gcloud auth login
 gcloud auth application-default login
+gcloud config set project <TU_PROYECTO>
+cp terraform.tfvars.example terraform.tfvars   # edita project_id
+cp .env.example .env                           # solo para validar compose en local
+ansible-galaxy collection install -r requirements.yml
 
-# 2. Infraestructura: SIEMPRE revisar el plan antes de aplicar
-terraform init
-terraform validate
-terraform plan -out=tfplan
+# 2. Infraestructura: revisar siempre el plan antes de aplicar
+make init
+make plan
 terraform show tfplan        # ¿algún recurso de pago? ¿algún "must be replaced"?
-terraform apply tfplan
+make apply
 
-# 3. Configuración: desde tu equipo, por túnel IAP (primer despliegue)
-#    La VM nueva NO tiene el repositorio ni Ansible; por eso el primer deploy se
-#    lanza desde tu checkout, igual que hace GitHub Actions.
+# 3. Secretos (0600, gitignored)
 cat > secrets.yml <<'YAML'
 grafana_admin_password: "cambia-esto-por-una-contrasena-larga"
 YAML
 chmod 600 secrets.yml
 
-ansible-galaxy collection install -r requirements.yml
-gcloud compute start-iap-tunnel instancia-devops-gcp 22 \
-  --local-host-port=localhost:2222 \
-  --project <TU_PROYECTO> --zone us-central1-a &
-ssh-keyscan -H -p 2222 127.0.0.1 >> ~/.ssh/known_hosts
-printf '[gcp_servers]\ngcp-server ansible_host=127.0.0.1 ansible_port=2222 ansible_user=ubuntu\n' \
-  > /tmp/inventory.ini
-ansible-playbook site.yml -i /tmp/inventory.ini \
-  --private-key ~/.ssh/id_deploy_gcp -e @secrets.yml
-kill %1 2>/dev/null || true
+# 4. Ventana de egress: sin salida a Internet, apt y docker pull fallan
+make egress-on
+make deploy                  # abre túnel IAP, ejecuta site.yml y lo cierra
+make egress-off              # vuelve al perfil 0,00 USD
 ```
 
-Guía completa, secretos, perfil público y modo CI en
-[`docs/EJECUCION.md`](docs/EJECUCION.md). Límites y costes en
-[`docs/FREE-TIER.md`](docs/FREE-TIER.md).
+`make deploy` comprueba que la ventana de egress está abierta, levanta el túnel
+IAP en `127.0.0.1:2222`, ejecuta `site.yml` con `-e @secrets.yml` (si existe) y
+cierra el túnel con `trap` incluso si Ansible falla. Para un bloque concreto:
+
+```bash
+make deploy ARGS="--tags verify"    # o --check para un dry-run
+```
 
 > ⚠️ **No hay backend remoto de Terraform.** El estado es local
-> (`terraform.tfstate`). Haz copia antes de operar. El estado de la instancia
-> anterior se movió a `.local/state-backups/deleted-project/` y **no** debe
-> reutilizarse en el proyecto nuevo.
+> (`terraform.tfstate`). Haz copia antes de operar (ver `docs/OPERACION.md`). El
+> estado del proyecto anterior está archivado en
+> `.local/state-backups/deleted-project/` y **no** debe reutilizarse.
+
+## 📚 Documentación
+
+| Documento | Contenido |
+|---|---|
+| [`docs/FREE-TIER.md`](docs/FREE-TIER.md) | Límites de Always Free, ventana de egress, checklist de facturación |
+| [`docs/OPERACION.md`](docs/OPERACION.md) | Puesta en marcha, día a día, versiones, backups, Terraform seguro y troubleshooting |
+| [`docs/runbooks/alerting.md`](docs/runbooks/alerting.md) | Qué hacer ante cada alerta |
+| [`docs/runbooks/disaster-recovery.md`](docs/runbooks/disaster-recovery.md) | Restauración de la base de datos y reconstrucción de la instancia |
+| [`CHANGELOG.md`](CHANGELOG.md) | Historial de cambios relevantes |
+
+## 💸 Coste
+
+| Concepto | Perfil gratuito | Ventana de egress |
+|---|---|---|
+| `e2-micro` + 30 GB `pd-standard` | 0,00 USD | 0,00 USD |
+| IP externa | no se crea | efímera; ~$0,005/hora (1 h/mes gratis) |
+| Snapshots | no se crean | no se crean |
+| VPC Flow Logs | desactivados | desactivados |
+| Egress | 1 GB/mes gratis | 1 GB/mes gratis; después `$0.12/GiB` |
+| Backup GCS | dentro de 5 GB gratis | dentro de 5 GB gratis |
+
+Una ventana típica de despliegue cuesta entre **0,00 y 0,02 USD**. Dejarla
+abierta 24/7 costaría ≈ `$3,65/mes`, por eso `make egress-off` forma parte del
+flujo. Detalle y verificación en [`docs/FREE-TIER.md`](docs/FREE-TIER.md).
+
+## 🛡️ Continuidad de negocio
+
+| Capa | Qué cubre | Frecuencia | Retención | Coste |
+|---|---|---|---|---|
+| Backup SQLite (API de backup + `integrity_check`) | Configuración de NPM | Diario 03:00 | 7 días · local + GCS | Gratis (5 GB) |
+
+**RPO 24 h / RTO ~30 min** para la base de datos. No hay snapshots de disco: la
+reconstrucción completa es Terraform + Ansible y restaurar la base de datos
+desde GCS. Restauración paso a paso en
+[`docs/runbooks/disaster-recovery.md`](docs/runbooks/disaster-recovery.md).
+
+## ⚙️ Optimización para 1 GB
+
+- **Swap 2 GB** con `vm.swappiness=10`: usa RAM primero y disco solo bajo
+  presión; persistente en `/etc/fstab`.
+- **Límites de memoria por contenedor** que suman 712 MiB, medidos con
+  `docker stats` (consumo real en reposo ~330 MiB).
+- **Sin cAdvisor:** su sondeo de metadatos llevaba el disco `pd-standard` a
+  ~90 % de io-wait. Al retirarlo bajó a ~1.3 %. node-exporter cubre las métricas
+  del host.
+- **Grafana fuera de los recreate automáticos:** su arranque cuesta ~20 min.
 
 ## 🔁 Pipeline CI/CD
 
 `quality.yml` corre en cada push/PR y no toca la nube: `terraform fmt/validate`,
-tflint, checkov, ansible-lint, yamllint, `docker compose config`, drift del
-dashboard, validación de reglas de Prometheus y de la plantilla de Alertmanager,
-y actionlint.
+gate de free tier, checkov, ansible-lint, yamllint, `docker compose config`,
+drift del dashboard, validación de reglas de Prometheus y de la plantilla de
+Alertmanager, y actionlint.
 
 `main.yml` despliega en push a `main` (o manual) **solo Ansible**, por túnel IAP.
 Configura en *Settings → Secrets and variables → Actions*:
@@ -139,43 +204,9 @@ Configura en *Settings → Secrets and variables → Actions*:
 Notas: el timeout es de **90 minutos** porque Grafana tarda 18-27 min en arrancar
 en una e2-micro. `BACKUP_BUCKET` activa la copia off-site; sin ella el backup
 local sigue funcionando, pero no hay DRP. `Alertmanager` entrega a un receiver
-`null` hasta que se configure `alertmanager_webhook_url` (opcional).
-
-## 💸 Coste
-
-| Concepto | Perfil gratuito | Perfil público |
-|---|---|---|
-| `e2-micro` + 30 GB `pd-standard` | 0,00 USD | 0,00 USD |
-| IP externa | no se crea | ≈ 3,65 USD/mes |
-| Snapshots | desactivados | ≈ 1 USD/mes si se activan |
-| VPC Flow Logs | desactivados | opcional, por GiB |
-| Egress | 1 GB/mes gratis | 1 GB/mes gratis; después `$0.12/GiB` |
-| Backup GCS | dentro de 5 GB gratis | dentro de 5 GB gratis |
-
-Detalle y verificación en [`docs/FREE-TIER.md`](docs/FREE-TIER.md).
-
-## 🛡️ Continuidad de negocio
-
-| Capa | Qué cubre | Frecuencia | Retención | Coste |
-|---|---|---|---|---|
-| Backup SQLite (API de backup + `integrity_check`) | Configuración de NPM | Diario 03:00 | 7 días · local + GCS | Gratis (5 GB) |
-| Snapshot de disco (opcional) | Instancia completa | Diario 04:00 UTC | 7 días | ≈ 1 USD/mes |
-
-**RPO 24 h / RTO ~30 min** para la base de datos. El snapshot es opcional: sin
-él, la reconstrucción de la instancia se hace con Terraform + Ansible y se
-restaura la base de datos desde GCS. Restauración paso a paso en
-[`docs/runbooks/disaster-recovery.md`](docs/runbooks/disaster-recovery.md).
-
-## ⚙️ Optimización para 1 GB
-
-- **Swap 2 GB** con `vm.swappiness=10`: usa RAM primero y disco solo bajo
-  presión; persistente en `/etc/fstab`.
-- **Límites de memoria por contenedor** que suman 712 MiB, medidos con
-  `docker stats` (consumo real en reposo ~330 MiB).
-- **Sin cAdvisor:** su sondeo de metadatos llevaba el disco `pd-standard` a
-  ~90 % de io-wait. Al retirarlo bajó a ~1.3 %. node-exporter cubre las métricas
-  del host.
-- **Grafana fuera de los recreate automáticos:** su arranque cuesta ~20 min.
+`null` hasta que se configure `alertmanager_webhook_url` (opcional). Si la
+ventana de egress no está abierta en el momento del push, el deploy de CI falla
+en `apt`: ábrela antes con `make egress-on`.
 
 ## 👨‍💻 Autor
 
