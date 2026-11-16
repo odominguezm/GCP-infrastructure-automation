@@ -44,7 +44,7 @@
       }
     ]
   },
-  "description": "Single view of the e2-micro instance: host, containers and the observability stack itself. Every panel is backed by a metric that a corresponding alert in alerts.yml also uses, so what is seen here is what pages.",
+  "description": "Single view of the e2-micro instance: host and the observability stack itself. Every panel is backed by a metric that a corresponding alert in alerts.yml also uses, so what is seen here is what pages. cAdvisor is deliberately not deployed (metadata I/O on pd-standard), so there are no per-container panels.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -1167,361 +1167,13 @@
       }
     },
     {
-      "id": 15,
-      "type": "row",
-      "title": "Containers (cAdvisor)",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 26,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "id": 16,
-      "type": "gauge",
-      "title": "Memory vs limit, per container",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 27,
-        "w": 12,
-        "h": 8
-      },
-      "description": "Each container's working set against the mem_limit set in docker-compose.yml. This is the panel that answers which of the seven containers is squeezing the others.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "container_memory_working_set_bytes{container!=\"\",container!=\"POD\"} / on(instance, name) container_spec_memory_limit_bytes{container!=\"\",container!=\"POD\"} * 100",
-          "legendFormat": "{{name}}",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "reducer": "lastNotNull",
-          "fields": ""
-        },
-        "orientation": "auto",
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "minVizHeight": 75,
-        "minVizWidth": 75
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "rgba(50, 172, 45, 1)",
-                "value": null
-              },
-              {
-                "color": "rgba(237, 129, 40, 1)",
-                "value": 70
-              },
-              {
-                "color": "rgba(245, 54, 54, 1)",
-                "value": 90
-              }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 17,
-      "type": "timeseries",
-      "title": "CPU by container",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 27,
-        "w": 12,
-        "h": 8
-      },
-      "description": "One core is 100%. Values above 100% mean the container used more than one core in parallel.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\"}[5m])) * 100",
-          "legendFormat": "{{name}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": null,
-          "max": null,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "rgba(50, 172, 45, 1)",
-                "value": null
-              }
-            ]
-          },
-          "mappings": [],
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "showPoints": "never",
-            "pointSize": 5,
-            "spanNulls": false,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            },
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 18,
-      "type": "timeseries",
-      "title": "Container restart pressure",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 35,
-        "w": 12,
-        "h": 7
-      },
-      "description": "Changes in container_last_seen: a non-zero line is a container disappearing and coming back, i.e. a restart or an OOM kill.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "changes(container_last_seen{container!=\"\",container!=\"POD\"}[30m])",
-          "legendFormat": "{{name}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "min": null,
-          "max": null,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "rgba(50, 172, 45, 1)",
-                "value": null
-              }
-            ]
-          },
-          "mappings": [],
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "showPoints": "never",
-            "pointSize": 5,
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 19,
-      "type": "timeseries",
-      "title": "Host memory vs container total",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 35,
-        "w": 12,
-        "h": 7
-      },
-      "description": "The gap between these two lines is what the OS itself plus Docker is using. It is normally small; if it is not, the problem is outside the containers.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "node_memory_MemAvailable_bytes",
-          "legendFormat": "host available",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum(container_memory_working_set_bytes{container!=\"\",container!=\"POD\"})",
-          "legendFormat": "containers total",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "min": null,
-          "max": null,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "rgba(50, 172, 45, 1)",
-                "value": null
-              }
-            ]
-          },
-          "mappings": [],
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "showPoints": "never",
-            "pointSize": 5,
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
       "id": 20,
       "type": "row",
       "title": "Observability stack",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 26,
         "w": 24,
         "h": 1
       },
@@ -1537,7 +1189,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 43,
+        "y": 27,
         "w": 8,
         "h": 7
       },
@@ -1641,7 +1293,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 43,
+        "y": 27,
         "w": 8,
         "h": 7
       },
@@ -1725,7 +1377,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 43,
+        "y": 27,
         "w": 8,
         "h": 7
       },

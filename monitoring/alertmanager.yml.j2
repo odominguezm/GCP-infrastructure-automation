@@ -37,7 +37,7 @@ route:
   # QUOTED on purpose: in YAML a bare `null` is the null value, not the string
   # "null". Unquoted, Alertmanager reads the receiver as unset and refuses to
   # start. The same applies to the receiver name below.
-  receiver: {% if alertmanager_webhook_url %}"slack-compatible"{% else %}"null"{% endif %}
+  receiver: {% if alertmanager_webhook_url | default(None) %}"slack-compatible"{% else %}"null"{% endif %}
 
   # How long Alertmanager waits after the first alert of a group before sending
   # the initial notification: it lets a flapping target settle instead of
@@ -63,7 +63,7 @@ receivers:
   # the notifications, which keeps the routing graph valid and the process
   # healthy while there is no endpoint to notify.
   - name: "null"
-{% if alertmanager_webhook_url %}
+{% if alertmanager_webhook_url | default(None) %}
   # Real delivery. The URL is a credential, so it arrives from the environment
   # (Ansible variable -> GitHub secret or group_vars/all/local.yml) and is never
   # committed.

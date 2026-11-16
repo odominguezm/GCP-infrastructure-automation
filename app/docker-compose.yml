@@ -2,7 +2,9 @@
 # ============================================================
 # Demo app: nginx serving static content.
 #
-# This is the sample workload that Nginx Proxy Manager publishes over TLS.
+# This is the sample workload that Nginx Proxy Manager publishes. With
+# enable_public_ip = true that is HTTPS on the public IP; in the default free
+# profile NPM is reached through an IAP tunnel and public TLS is not issued.
 # ============================================================
 
 x-logging: &default-logging
@@ -17,10 +19,9 @@ services:
     container_name: demo-app
     restart: unless-stopped
     ports:
-      # Bound to 127.0.0.1 on purpose. It used to be published on 21680 to the
-      # whole internet, which made the demo reachable without TLS or a proxy.
-      # Now the only ingress path is HTTPS through Nginx Proxy Manager, which is
-      # how an application is actually deployed.
+      # Bound to 127.0.0.1 on purpose: the demo is never published directly.
+      # Nginx Proxy Manager is the ingress path (HTTPS with enable_public_ip,
+      # or an IAP tunnel to NPM's port 80 in the free profile).
       - "127.0.0.1:21680:80"
     volumes:
       # Static content. If this volume were read-write, a compromised container
@@ -30,7 +31,12 @@ services:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/ || exit 1"]
       interval: 30s
       timeout: 5s
-      retries: 3
+      # 5 retries and not Docker's default 3: on this instance the box sits at
+      # load 8+ while a deployment recreates containers, and three consecutive
+      # timeouts under that load mark a healthy container `unhealthy`. Five
+      # retries at a 30 s interval is 150 s of tolerance, which the false
+      # positives need and a genuinely dead container does not mind.
+      retries: 5
       start_period: 10s
     # A single static page served by nginx. 24 MiB is generous for this workload.
     mem_limit: 24m

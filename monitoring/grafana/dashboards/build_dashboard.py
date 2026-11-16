@@ -273,56 +273,19 @@ panels += [
                 target('rate(node_disk_written_bytes_total{device!="loop"}[5m])', "written", "B")],
                "Bps", 12, 19, 12, 7),
 
-    row(15, "Containers (cAdvisor)", 26),
-
-    gauge(16, "Memory vs limit, per container",
-          [target(
-              'container_memory_working_set_bytes{container!="",container!="POD"}'
-              ' / on(instance, name) container_spec_memory_limit_bytes{container!="",container!="POD"} * 100',
-              "{{name}}", instant=True)],
-          "percent", 0, 27, 12, 8, pct_thresholds(70, 90),
-          desc="Each container's working set against the mem_limit set in "
-               "docker-compose.yml. This is the panel that answers which of the "
-               "seven containers is squeezing the others."),
-
-    timeseries(17, "CPU by container",
-               [target(
-                   'sum by (name) (rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) * 100',
-                   "{{name}}")],
-               "percent", 12, 27, 12, 8, stack=True,
-               desc="One core is 100%. Values above 100% mean the container used "
-                    "more than one core in parallel."),
-
-    timeseries(18, "Container restart pressure",
-               [target(
-                   'changes(container_last_seen{container!="",container!="POD"}[30m])',
-                   "{{name}}")],
-               "short", 0, 35, 12, 7,
-               desc="Changes in container_last_seen: a non-zero line is a "
-                    "container disappearing and coming back, i.e. a restart or "
-                    "an OOM kill."),
-
-    timeseries(19, "Host memory vs container total",
-               [target("node_memory_MemAvailable_bytes", "host available", "A"),
-                target('sum(container_memory_working_set_bytes{container!="",container!="POD"})', "containers total", "B")],
-               "bytes", 12, 35, 12, 7,
-               desc="The gap between these two lines is what the OS itself plus "
-                    "Docker is using. It is normally small; if it is not, the "
-                    "problem is outside the containers."),
-
-    row(20, "Observability stack", 42),
+    row(20, "Observability stack", 26),
 
     timeseries(21, "Prometheus series",
                [target("prometheus_tsdb_head_series", "head series", "A"),
                 target("prometheus_tsdb_head_chunks", "head chunks", "B")],
-               "short", 0, 43, 8, 7,
+               "short", 0, 27, 8, 7,
                th=thresholds(steps((GREEN, None), (AMBER, 5000), (RED, 10000))),
                desc="Series in memory. Cardinality is the usual cause of a "
                     "Prometheus OOM on a small instance."),
 
     timeseries(22, "Scrape health",
                [target("up", "{{job}}", "A")],
-               "short", 8, 43, 8, 7,
+               "short", 8, 27, 8, 7,
                legend_calcs=("min",),
                minv=0, maxv=1,
                desc="0 or 1 per target. A target stuck at 0 is why alerts about "
@@ -330,7 +293,7 @@ panels += [
 
     timeseries(23, "Rule evaluation",
                [target('prometheus_rule_evaluation_failures_total', "failures", "A")],
-               "short", 16, 43, 8, 7,
+               "short", 16, 27, 8, 7,
                legend_calcs=("max",),
                desc="Non-zero means a rule in alerts.yml is broken and silently "
                     "not being evaluated."),
@@ -369,10 +332,11 @@ dashboard = {
         ],
     },
     "description": (
-        "Single view of the e2-micro instance: host, containers and the "
-        "observability stack itself. Every panel is backed by a metric that a "
-        "corresponding alert in alerts.yml also uses, so what is seen here is "
-        "what pages."
+        "Single view of the e2-micro instance: host and the observability stack "
+        "itself. Every panel is backed by a metric that a corresponding alert in "
+        "alerts.yml also uses, so what is seen here is what pages. cAdvisor is "
+        "deliberately not deployed (metadata I/O on pd-standard), so there are "
+        "no per-container panels."
     ),
     "editable": True,
     "fiscalYearStartMonth": 0,

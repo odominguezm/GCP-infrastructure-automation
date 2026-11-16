@@ -1,6 +1,7 @@
 ---
 # ============================================================
-# Prometheus configuration
+# Prometheus configuration (this file is rewritten by every deploy;
+# Prometheus is recreated with the new content by tasks/stacks.yml)
 # ============================================================
 
 global:
@@ -43,14 +44,10 @@ scrape_configs:
         labels:
           component: host
 
-  # Containers via cAdvisor. This is the job that answers "which container is
-  # responsible", which is the question that matters when seven containers share
-  # 1 GB of RAM.
-  - job_name: cadvisor
-    static_configs:
-      - targets: ["cadvisor:8080"]
-        labels:
-          component: runtime
+  # (cAdvisor was removed: it was the biggest source of metadata I/O on a
+  # pd-standard disk with ~22-45 baseline IOPS, measured >90% io-wait with it
+  # running. Only per-container metrics were lost; node-exporter above covers
+  # the host, which is the level that matters on 1 GB. See group_vars/all/main.yml.)
 
   # Alertmanager itself. Scraped so the dead man's switch (the Watchdog alert)
   # can be verified end to end rather than assumed to work.
